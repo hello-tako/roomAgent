@@ -48,11 +48,7 @@ and per-artifact or artifact shards. No premature sharding is performed here.
 
 ## Next safe step
 
-Read [current-runtime.md](reports/current-runtime.md) before the next deploy. The
-public hostname still runs the 2026-10-08 Worker, and `apps/api/wrangler.jsonc` does
-not describe it. Product work still needs an explicit request: human login
-integration, then any UI or approved runtime adapter. Budget guards and the bounded
-audit replay are part of the merged remediation, not deferred next-session work.
+Stage C local code is on `feat/stage-c-bootstrap-smoke-v1`. The next human gates are pull-request review, merge, then a separate staging deploy, then C1 bootstrap, then C2 business smoke. None of those remote steps is authorized by the local suite. Read [current-runtime.md](reports/current-runtime.md) and [stage-c/06_STAGING_DEPLOYMENT_PLAN.md](reports/stage-c/06_STAGING_DEPLOYMENT_PLAN.md) before any deploy. The public hostname still runs the 2026-10-08 Worker, and `apps/api/wrangler.jsonc` does not describe it. Muse and CUE stay unimplemented.
 
 ## Safety rules that stay in force
 

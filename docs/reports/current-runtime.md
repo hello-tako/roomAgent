@@ -41,3 +41,7 @@ This upload is the Phase 10 publication build. It is older than `main`. `apps/ap
 The Worker response behind Access was not read. A 302 proves the hostname and Access application answer. It does not prove `/health` inside the Worker.
 
 Unrelated account databases, buckets, and queues were not changed by this check. Bindings in both Wrangler files still omit `"remote": true`.
+
+## Stage C code is not this runtime
+
+`feat/stage-c-bootstrap-smoke-v1` adds a staging-only bootstrap route and local smoke tests. That code was not uploaded. `ai-company-os-api` and `ai-company-os-api-staging` remain the versions in the tables above. Do not deploy `apps/api/wrangler.jsonc` onto the public hostname. A staging deploy, if one is approved later, uses `apps/api/wrangler.staging.jsonc` and the merge SHA, not these versions. The certification record is [stage-c/FINAL_STAGE_C_CERTIFICATION.md](stage-c/FINAL_STAGE_C_CERTIFICATION.md).

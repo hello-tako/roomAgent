@@ -85,6 +85,10 @@
   "vars": {
     "ACCESS_TEAM_DOMAIN": "https://little-bar-8ffa.cloudflareaccess.com",
     "ACCESS_AUD": "24f00c2910e19f99e8a833de7b6c7dc14d18683699985a6d9fbfc66fb2c3612f",
+    "STAGING_OPERATOR_BOOTSTRAP": "enabled",
+    "STAGING_ACCOUNT_ID": "ef250a88911fd24073cb73d1c07e0218",
+    "STAGING_DATABASE_ID": "a6b8c2f6-d697-442b-8374-5006246324b2",
+    "STAGING_DATABASE_NAME": "ai-company-os-staging",
   },
   "observability": {
     "enabled": true,

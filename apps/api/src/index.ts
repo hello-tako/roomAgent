@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { registerArtifactRoutes } from "./artifacts-route";
 import { registerGovernanceRoutes } from "./governance-route";
 import { registerHumanBootstrapRoutes } from "./human-bootstrap-route";
+import { registerStagingBootstrapRoutes } from "./staging-bootstrap-route";
 import { handleQueue } from "./events/consumer";
 import { resolveHttpPrincipal } from "./http-principal";
 import { registerWorkflowStartRoutes } from "./workflow-start-route";
@@ -248,6 +249,7 @@ registerArtifactRoutes(app);
 registerGovernanceRoutes(app);
 registerHumanBootstrapRoutes(app);
 registerWorkflowStartRoutes(app);
+registerStagingBootstrapRoutes(app);
 
 app.notFound((c) =>
   c.json(

@@ -1,8 +1,14 @@
 # Status
 
+## Stage C
+
+State: `ROOMAGENT_STAGE_C_CODE_LOCAL_PASS` on `feat/stage-c-bootstrap-smoke-v1`.
+
+Baseline `main` is `3528f923692b53c80559ba55a7101773e9a8bd1b`. The branch adds an operator-only staging bootstrap and a local governed smoke. It is not merged, not deployed, and not a remote D1 write. The public Worker `ai-company-os-api` is unchanged. Staging Worker version `3aeb3cbc-0f44-470c-af2c-30ab64d1bc55` does not contain this route yet. Certification stays `AI_COMPANY_OS_POC_PARTIAL`. `ROOMAGENT_STAGING_STAGE_C_RUNTIME_CERTIFIED` is not issued. The record is [stage-c/FINAL_STAGE_C_CERTIFICATION.md](reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md).
+
 ## Current runtime
 
-Recorded: 2026-10-10. `main` is `6cf1db7` on https://github.com/takovn2/roomAgent.
+Recorded: 2026-10-10. The runtime note below was drafted against `6cf1db7`. The commit that published it is `3528f923692b53c80559ba55a7101773e9a8bd1b` on https://github.com/takovn2/roomAgent.
 `origin` is still `https://github.com/vn-tak/roomAgent.git`, and GitHub resolves it to `takovn2/roomAgent`.
 
 Certification stays `AI_COMPANY_OS_POC_PARTIAL`. The detail is [current-runtime.md](reports/current-runtime.md).
