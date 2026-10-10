@@ -300,6 +300,28 @@ class StagingConfigTests(unittest.TestCase):
         self.assertIn("STAGING_BINDINGS_DIFFER_FROM_BASE", gate)
         self.assertIn("QUEUE_RETRY_WITHOUT_DELAY:ai-company-os-staging-domain-events", gate)
 
+    def test_public_database_binding_is_rejected(self):
+        staging = copy.deepcopy(self.staging)
+        staging["d1_databases"][0]["database_id"] = pf.PINNED_PUBLIC_D1
+        staging["d1_databases"][0]["database_name"] = pf.PINNED_PUBLIC_D1_NAME
+        staging["vars"]["STAGING_DATABASE_ID"] = pf.PINNED_PUBLIC_D1
+        reasons = self.check(staging)["gates"]["STAGING_CONFIG_ISOLATED"]["reasons"]
+        self.assertIn("PROTECTED_PUBLIC_DATABASE_TARGETED", reasons)
+        self.assertIn("STAGING_D1_UUID_MISMATCH", reasons)
+        self.assertIn("STAGING_D1_NAME_MISMATCH", reasons)
+        self.assertIn("STAGING_DATABASE_VAR_MISMATCH", reasons)
+        self.assertNotIn("DATABASE_VAR_DOES_NOT_MATCH_BINDING", reasons)
+
+    def test_staging_var_cannot_hide_a_public_binding(self):
+        staging = copy.deepcopy(self.staging)
+        staging["d1_databases"][0]["database_id"] = pf.PINNED_PUBLIC_D1
+        staging["d1_databases"][0]["database_name"] = pf.PINNED_PUBLIC_D1_NAME
+        reasons = self.check(staging)["gates"]["STAGING_CONFIG_ISOLATED"]["reasons"]
+        self.assertIn("DATABASE_VAR_DOES_NOT_MATCH_BINDING", reasons)
+        self.assertIn("PROTECTED_PUBLIC_DATABASE_TARGETED", reasons)
+        self.assertIn("STAGING_D1_UUID_MISMATCH", reasons)
+        self.assertNotIn("STAGING_DATABASE_VAR_MISMATCH", reasons)
+
     def test_jsonc_parser_keeps_strings_with_comment_markers(self):
         parsed = json.loads(pf.strip_jsonc('{"a": "https://x//y", /* c */ "b": [1, 2,], // d\n}'))
         self.assertEqual(parsed, {"a": "https://x//y", "b": [1, 2]})
