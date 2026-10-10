@@ -25,6 +25,11 @@ MIGRATION_NAME = re.compile(r"^(\d{4})_[a-z0-9_]+\.sql$")
 ACCOUNT_ID = re.compile(r"^[0-9a-f]{32}$")
 DATABASE_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 PLACEHOLDER = re.compile(r"REPLACE|PLACEHOLDER|TODO|^0{8}-", re.IGNORECASE)
+PINNED_STAGING_ACCOUNT = "ef250a88911fd24073cb73d1c07e0218"
+PINNED_STAGING_D1 = "a6b8c2f6-d697-442b-8374-5006246324b2"
+PINNED_STAGING_D1_NAME = "ai-company-os-staging"
+PINNED_PUBLIC_D1 = "a4b622e6-978b-4ce2-ad82-cd0eb1cc4387"
+PINNED_PUBLIC_D1_NAME = "ai-company-os"
 INTERNAL_PREFIXES = ("sqlite_", "_cf_")
 LEDGER_TABLE = "d1_migrations"
 D1_GATES = (
@@ -403,11 +408,37 @@ def check_staging_config(base, staging, target, entry_source):
                 isolation_reasons.append(f"STAGING_REUSES_BASE_RESOURCE:{kind}:{value}")
     if staging.get("account_id") != target.get("account_id"):
         isolation_reasons.append("STAGING_ACCOUNT_NOT_PINNED")
+    if staging.get("account_id") != PINNED_STAGING_ACCOUNT:
+        isolation_reasons.append("STAGING_ACCOUNT_UUID_MISMATCH")
+    if (
+        target.get("account_id") != PINNED_STAGING_ACCOUNT
+        or target.get("database_id") != PINNED_STAGING_D1
+    ):
+        isolation_reasons.append("STAGING_TARGET_FILE_MISMATCH")
     if staging.get("workers_dev") is not False or staging.get("preview_urls") is not False:
         isolation_reasons.append("STAGING_PUBLIC_WORKERS_DEV_ENABLED")
     for database in staging.get("d1_databases", []):
         if database.get("database_id") == (base.get("d1_databases") or [{}])[0].get("database_id"):
             isolation_reasons.append("STAGING_REUSES_BASE_DATABASE_ID")
+        if database.get("database_id") != PINNED_STAGING_D1:
+            isolation_reasons.append("STAGING_D1_UUID_MISMATCH")
+        if database.get("database_name") != PINNED_STAGING_D1_NAME:
+            isolation_reasons.append("STAGING_D1_NAME_MISMATCH")
+        if (
+            database.get("database_id") == PINNED_PUBLIC_D1
+            or database.get("database_name") == PINNED_PUBLIC_D1_NAME
+        ):
+            isolation_reasons.append("PROTECTED_PUBLIC_DATABASE_TARGETED")
+    vars_ = staging.get("vars") or {}
+    if vars_.get("STAGING_RUNTIME") != "cloudflare":
+        isolation_reasons.append("STAGING_RUNTIME_NOT_PINNED")
+    if vars_.get("STAGING_ACCOUNT_ID") != PINNED_STAGING_ACCOUNT:
+        isolation_reasons.append("STAGING_ACCOUNT_VAR_MISMATCH")
+    if vars_.get("STAGING_DATABASE_ID") != PINNED_STAGING_D1:
+        isolation_reasons.append("STAGING_DATABASE_VAR_MISMATCH")
+    binding_ids = [item.get("database_id") for item in staging.get("d1_databases", [])]
+    if vars_.get("STAGING_DATABASE_ID") not in binding_ids:
+        isolation_reasons.append("DATABASE_VAR_DOES_NOT_MATCH_BINDING")
 
     gates = {
         "DO_CLASSES_VALIDATED_LOCALLY": gate(class_reasons),

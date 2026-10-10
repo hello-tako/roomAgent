@@ -32,7 +32,7 @@ D1 = a4b622e6-978b-4ce2-ad82-cd0eb1cc4387
 
 ## Expected side effects after an approved deploy
 
-A new version of `ai-company-os-api-staging` on the existing hostname. Same D1, R2, queues, Durable Object classes, and workflow binding. New plain-text vars pin the staging account and database and set `STAGING_OPERATOR_BOOTSTRAP` to `enabled`. No new route is created by this plan. Access application `8a141d2f-91a5-4cfc-bc8d-33aedfcec070` is not modified. MFA is not modified. The approval digest secret is not set by the deploy file. Without that secret the route cannot write.
+A new version of `ai-company-os-api-staging` on the existing hostname. Same D1, R2, queues, Durable Object classes, and workflow binding. Plain-text vars pin the staging account and database, set `STAGING_OPERATOR_BOOTSTRAP` to `enabled`, and set `STAGING_RUNTIME` to `cloudflare`. No new Access route is created by this plan. Access application `8a141d2f-91a5-4cfc-bc8d-33aedfcec070` is not modified. MFA is not modified. The deploy file does not set `BOOTSTRAP_APPROVAL_TOKEN`, `BOOTSTRAP_APPROVAL_DIGEST`, or `STAGING_RELEASE_SHA`. Without those secrets the route cannot write. After the bootstrap is `VERIFIED`, remove the bootstrap var and delete those secrets.
 
 ## Rollback limit
 

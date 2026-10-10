@@ -15,9 +15,65 @@ type App = Hono<EnvVars>;
 type BootstrapContext = Context<EnvVars>;
 
 const ACCESS_HEADER = "cf-access-jwt-assertion";
+const HEX_64 = /^[0-9a-f]{64}$/;
+
+export const BOOTSTRAP_RETIREMENT = {
+  after: "VERIFIED",
+  removeVar: "STAGING_OPERATOR_BOOTSTRAP",
+  removeSecrets: ["BOOTSTRAP_APPROVAL_TOKEN", "BOOTSTRAP_APPROVAL_DIGEST"],
+} as const;
 
 export function stagingBootstrapEnabled(value: unknown): boolean {
   return value === "enabled";
+}
+
+export function bootstrapHarnessAllowed(env: object): boolean {
+  const vars = env as { BOOTSTRAP_LOCAL_HARNESS?: unknown; STAGING_RUNTIME?: unknown };
+  return (
+    isTestHarness(env) &&
+    vars.BOOTSTRAP_LOCAL_HARNESS === "vitest" &&
+    vars.STAGING_RUNTIME !== "cloudflare"
+  );
+}
+
+export function approvalAuthorized(input: {
+  providedDigest: string;
+  planDigest: string;
+  providedToken: string;
+  tokenSecret: unknown;
+  digestSecret: unknown;
+  harness: boolean;
+}): { ok: boolean; reason: string } {
+  if (input.providedDigest !== input.planDigest) {
+    return { ok: false, reason: "APPROVAL_DIGEST_MISMATCH" };
+  }
+  if (input.harness) return { ok: true, reason: "HARNESS" };
+  if (typeof input.tokenSecret !== "string" || !HEX_64.test(input.tokenSecret)) {
+    return { ok: false, reason: "APPROVAL_TOKEN_MISSING" };
+  }
+  if (input.tokenSecret === input.planDigest) {
+    return { ok: false, reason: "APPROVAL_TOKEN_DERIVED" };
+  }
+  if (
+    typeof input.digestSecret !== "string" ||
+    !HEX_64.test(input.digestSecret) ||
+    !hexEqual(input.digestSecret, input.planDigest)
+  ) {
+    return { ok: false, reason: "APPROVAL_DIGEST_NOT_PINNED" };
+  }
+  if (!HEX_64.test(input.providedToken) || !hexEqual(input.providedToken, input.tokenSecret)) {
+    return { ok: false, reason: "APPROVAL_TOKEN_MISMATCH" };
+  }
+  return { ok: true, reason: "APPROVED" };
+}
+
+function hexEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
 }
 
 export function registerStagingBootstrapRoutes(app: App): void {
@@ -50,18 +106,26 @@ async function bootstrap(c: BootstrapContext): Promise<Response> {
     return c.json(errorBody(requestId, "IDENTITY_MISMATCH", "Identity was rejected."), 403);
   }
   const digest = await bootstrapPlanDigest(body);
-  const provided = c.req.header("x-bootstrap-approval-digest") ?? "";
-  if (!approvalMatches(vars, provided, digest, isTestHarness(c.env))) {
-    return c.json(
-      errorBody(requestId, "APPROVAL_DIGEST_MISMATCH", "Bootstrap was not approved."),
-      403,
-    );
+  const harness = bootstrapHarnessAllowed(c.env);
+  const approval = approvalAuthorized({
+    providedDigest: c.req.header("x-bootstrap-approval-digest") ?? "",
+    planDigest: digest,
+    providedToken: c.req.header("x-bootstrap-approval-token") ?? "",
+    tokenSecret: vars.BOOTSTRAP_APPROVAL_TOKEN,
+    digestSecret: vars.BOOTSTRAP_APPROVAL_DIGEST,
+    harness,
+  });
+  if (!approval.ok) {
+    return c.json(errorBody(requestId, approval.reason, "Bootstrap was not approved."), 403);
   }
-  const harness = isTestHarness(c.env);
+  const cloudflareRuntime = vars.STAGING_RUNTIME === "cloudflare";
   const outcome = await applyStagingBootstrap(c.env.DB, body, {
     approvalDigest: digest,
     allowLocalSimulator: harness && body.execution === "local-simulator",
-    remoteAuthorized: !harness && body.execution === "remote-staging",
+    remoteAuthorized: cloudflareRuntime && !harness && body.execution === "remote-staging",
+    independentApproval: approval.reason === "APPROVED",
+    approvedReleaseSha:
+      typeof vars.STAGING_RELEASE_SHA === "string" ? vars.STAGING_RELEASE_SHA : null,
   });
   const status =
     outcome.state === "VERIFIED" ? 200 : outcome.state === "BOOTSTRAP_STATE_CONFLICT" ? 409 : 403;
@@ -73,6 +137,12 @@ async function bootstrap(c: BootstrapContext): Promise<Response> {
       user_id: outcome.userId,
       org_id: outcome.orgId,
       identity_id: outcome.identityId,
+      retirement: {
+        after: BOOTSTRAP_RETIREMENT.after,
+        remove_var: BOOTSTRAP_RETIREMENT.removeVar,
+        remove_secrets: BOOTSTRAP_RETIREMENT.removeSecrets,
+      },
+      database_binding_checked_by_route: false,
     },
     status,
   );
@@ -83,7 +153,11 @@ interface StagingVars {
   STAGING_ACCOUNT_ID?: unknown;
   STAGING_DATABASE_ID?: unknown;
   STAGING_DATABASE_NAME?: unknown;
+  STAGING_RUNTIME?: unknown;
+  STAGING_RELEASE_SHA?: unknown;
   BOOTSTRAP_APPROVAL_DIGEST?: unknown;
+  BOOTSTRAP_APPROVAL_TOKEN?: unknown;
+  BOOTSTRAP_LOCAL_HARNESS?: unknown;
 }
 
 function stagingVars(env: Env): StagingVars {
@@ -96,18 +170,6 @@ function stagingVarsMatch(env: StagingVars): boolean {
     env.STAGING_DATABASE_ID === STAGING_D1_DATABASE_ID &&
     env.STAGING_DATABASE_NAME === STAGING_DATABASE_NAME
   );
-}
-
-function approvalMatches(
-  env: StagingVars,
-  provided: string,
-  digest: string,
-  harness: boolean,
-): boolean {
-  if (provided !== digest) return false;
-  const secret = env.BOOTSTRAP_APPROVAL_DIGEST;
-  if (typeof secret === "string" && /^[0-9a-f]{64}$/.test(secret) && secret === digest) return true;
-  return harness;
 }
 
 async function readPlan(c: BootstrapContext): Promise<BootstrapPlan | null> {

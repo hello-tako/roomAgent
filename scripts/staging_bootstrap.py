@@ -36,10 +36,10 @@ def target_reasons(staging):
     if staging.get("account_id") != STAGING_ACCOUNT:
         reasons.append("CLOUDFLARE_ACCOUNT_MISMATCH")
     databases = staging.get("d1_databases") or []
-    if len(databases) != 1:
+    database = databases[0] if len(databases) == 1 else None
+    if database is None:
         reasons.append("D1_DATABASE_COUNT")
     else:
-        database = databases[0]
         if database.get("database_name") != STAGING_NAME:
             reasons.append("D1_DATABASE_NAME_MISMATCH")
         if database.get("database_id") != STAGING_D1:
@@ -57,10 +57,21 @@ def target_reasons(staging):
         reasons.append("STAGING_DATABASE_VAR_MISMATCH")
     if vars_.get("STAGING_DATABASE_NAME") != STAGING_NAME:
         reasons.append("STAGING_DATABASE_NAME_VAR_MISMATCH")
-    if "BOOTSTRAP_APPROVAL_DIGEST" in vars_:
-        reasons.append("APPROVAL_DIGEST_MUST_NOT_BE_IN_CONFIG")
-    if "TEST_MIGRATIONS" in vars_:
-        reasons.append("TEST_HARNESS_MUST_NOT_BE_IN_CONFIG")
+    if vars_.get("STAGING_RUNTIME") != "cloudflare":
+        reasons.append("STAGING_RUNTIME_NOT_PINNED")
+    if staging.get("account_id") != vars_.get("STAGING_ACCOUNT_ID"):
+        reasons.append("ACCOUNT_BINDING_VAR_DIVERGENCE")
+    if database is not None and database.get("database_id") != vars_.get("STAGING_DATABASE_ID"):
+        reasons.append("DATABASE_BINDING_VAR_DIVERGENCE")
+    for forbidden in (
+        "BOOTSTRAP_APPROVAL_DIGEST",
+        "BOOTSTRAP_APPROVAL_TOKEN",
+        "STAGING_RELEASE_SHA",
+        "TEST_MIGRATIONS",
+        "BOOTSTRAP_LOCAL_HARNESS",
+    ):
+        if forbidden in vars_:
+            reasons.append(f"{forbidden}_MUST_NOT_BE_IN_CONFIG")
     return reasons
 
 
@@ -73,8 +84,13 @@ def inspect():
         reasons.append("BASE_CONFIG_UNEXPECTED")
     if base.get("name") != PUBLIC_WORKER:
         reasons.append("BASE_WORKER_UNEXPECTED")
-    if "STAGING_OPERATOR_BOOTSTRAP" in (base.get("vars") or {}):
+    base_vars = base.get("vars") or {}
+    if "STAGING_OPERATOR_BOOTSTRAP" in base_vars:
         reasons.append("PUBLIC_CONFIG_ENABLES_BOOTSTRAP")
+    if "TEST_MIGRATIONS" in base_vars or "BOOTSTRAP_LOCAL_HARNESS" in base_vars:
+        reasons.append("PUBLIC_CONFIG_ENABLES_HARNESS")
+    if base_vars.get("STAGING_RUNTIME") == "cloudflare":
+        reasons.append("PUBLIC_CONFIG_MARKED_STAGING_RUNTIME")
     return {
         "tool": "roomagent-stage-c-bootstrap",
         "mode": "PLAN_ONLY",
@@ -136,6 +152,14 @@ def main(argv=None):
             "expectedPreState": "uninitialized",
             "expected_writes": "one D1 batch after a separate human gate",
             "remote_writes": 0,
+            "approval": "random BOOTSTRAP_APPROVAL_TOKEN plus pinned BOOTSTRAP_APPROVAL_DIGEST",
+            "release_sha": "STAGING_RELEASE_SHA secret must equal plan.repositorySha",
+            "retirement_after_verified": [
+                "remove var STAGING_OPERATOR_BOOTSTRAP",
+                "delete secret BOOTSTRAP_APPROVAL_TOKEN",
+                "delete secret BOOTSTRAP_APPROVAL_DIGEST",
+                "delete secret STAGING_RELEASE_SHA",
+            ],
         }
     elif args.command == "verify":
         report["mode"] = "VERIFY"

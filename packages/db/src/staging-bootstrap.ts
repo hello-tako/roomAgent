@@ -50,7 +50,27 @@ export interface BootstrapApplyOptions {
   approvalDigest: string;
   allowLocalSimulator?: boolean;
   remoteAuthorized?: boolean;
+  independentApproval?: boolean;
+  approvedReleaseSha?: string | null;
 }
+
+export const EXPECTED_MIGRATION_NAMES = [
+  "0001_phase1_schema.sql",
+  "0002_phase1_permission_catalog.sql",
+  "0003_phase2_authority.sql",
+  "0004_phase3_room_sequence.sql",
+  "0005_phase4_agent_join.sql",
+  "0006_phase5_tasks.sql",
+  "0007_phase6_events.sql",
+  "0008_phase7_artifacts.sql",
+  "0009_phase8_governance.sql",
+  "0010_phase9_workflows.sql",
+  "0011_architecture_integrity_and_human_sessions.sql",
+  "0012_task_completion_and_trace.sql",
+  "0013_direct_artifact_size.sql",
+  "0014_workflow_completed_version.sql",
+  "0015_workflow_start_claims_and_human_identities.sql",
+] as const;
 
 interface IdentityRow {
   id: string;
@@ -113,6 +133,47 @@ export function targetDenial(plan: BootstrapPlan): string | null {
   return null;
 }
 
+export function releaseShaDenial(
+  plan: BootstrapPlan,
+  approvedReleaseSha: string | null,
+): string | null {
+  if (plan.execution !== "remote-staging") return null;
+  if (!approvedReleaseSha || !SHA.test(approvedReleaseSha)) return "RELEASE_SHA_NOT_PINNED";
+  if (plan.repositorySha !== approvedReleaseSha) return "RELEASE_SHA_MISMATCH";
+  return null;
+}
+
+export function migrationLedgerDenial(names: readonly string[]): string | null {
+  if (names.length < EXPECTED_MIGRATION_NAMES.length) return "SCHEMA_INCOMPLETE";
+  for (let index = 0; index < EXPECTED_MIGRATION_NAMES.length; index += 1) {
+    if (names[index] !== EXPECTED_MIGRATION_NAMES[index]) return "SCHEMA_MISMATCH";
+  }
+  if (names.length !== EXPECTED_MIGRATION_NAMES.length) return "SCHEMA_DRIFT";
+  return null;
+}
+
+export function roleAssignmentDenial(
+  rows: readonly { code: string; permission: string }[],
+): string | null {
+  const actual = new Map<string, string[]>();
+  for (const row of rows) {
+    const list = actual.get(row.code) ?? [];
+    list.push(row.permission);
+    actual.set(row.code, list);
+  }
+  if (actual.size !== ROLE_TEMPLATES.length) return "ROLE_TEMPLATE_CONFLICT";
+  for (const template of ROLE_TEMPLATES) {
+    const got = actual.get(template.code);
+    if (!got) return "ROLE_TEMPLATE_CONFLICT";
+    const expected = [...template.permissions].sort();
+    const seen = [...got].sort();
+    if (expected.length !== seen.length || expected.some((code, index) => code !== seen[index])) {
+      return "ROLE_PERMISSION_CONFLICT";
+    }
+  }
+  return null;
+}
+
 function attestationDenial(plan: BootstrapPlan): string | null {
   if (plan.verificationSource !== "cloudflare-access-operator-record") return "ATTESTATION_INVALID";
   if (!ISSUER.test(plan.issuer)) return "ATTESTATION_INVALID";
@@ -152,6 +213,8 @@ export async function inspectStagingBootstrap(
   if (target) return denied(target);
   const attestation = attestationDenial(plan);
   if (attestation) return denied(attestation);
+  const ledgerProblem = migrationLedgerDenial(await migrationNames(db));
+  if (ledgerProblem) return denied(ledgerProblem);
 
   const bySubject = await db
     .prepare(
@@ -208,6 +271,20 @@ export async function inspectStagingBootstrap(
       bySubject.id,
     );
   }
+  const assigned = await db
+    .prepare(
+      `SELECT roles.code AS code, role_permissions.permission_code AS permission
+       FROM roles
+       JOIN role_permissions
+         ON role_permissions.org_id = roles.org_id AND role_permissions.role_id = roles.id
+       WHERE roles.org_id = ? AND roles.system_role = 1`,
+    )
+    .bind(owned[0]?.id)
+    .all<{ code: string; permission: string }>();
+  const assignment = roleAssignmentDenial(assigned.results);
+  if (assignment) {
+    return conflict(assignment, bySubject.user_id, owned[0]?.id ?? null, bySubject.id);
+  }
   return {
     state: "VERIFIED",
     reason: "ALREADY_PROVISIONED",
@@ -216,6 +293,17 @@ export async function inspectStagingBootstrap(
     orgId: owned[0]?.id ?? null,
     identityId: bySubject.id,
   };
+}
+
+async function migrationNames(db: D1Database): Promise<string[]> {
+  try {
+    const ledger = await db
+      .prepare(`SELECT name FROM d1_migrations ORDER BY id`)
+      .all<{ name: string }>();
+    return ledger.results.map((row) => row.name);
+  } catch {
+    return [];
+  }
 }
 
 function conflict(
@@ -238,8 +326,15 @@ export async function applyStagingBootstrap(
   if (plan.execution === "local-simulator" && options.allowLocalSimulator !== true) {
     return denied("LOCAL_SIMULATOR_NOT_AUTHORIZED");
   }
-  if (plan.execution === "remote-staging" && options.remoteAuthorized !== true) {
+  if (
+    plan.execution === "remote-staging" &&
+    (options.remoteAuthorized !== true || options.independentApproval !== true)
+  ) {
     return denied("REMOTE_NOT_AUTHORIZED");
+  }
+  if (plan.execution === "remote-staging") {
+    const release = releaseShaDenial(plan, options.approvedReleaseSha ?? null);
+    if (release) return denied(release);
   }
   const inspected = await inspectStagingBootstrap(db, plan);
   if (inspected.state !== "PLAN_READY") return inspected;
@@ -309,12 +404,14 @@ export async function applyStagingBootstrap(
       return denied("BOOTSTRAP_WRITE_FAILED");
     }
   }
+  const verified = await inspectStagingBootstrap(db, plan);
+  if (verified.state !== "VERIFIED") return verified;
   return {
     state: "VERIFIED",
     reason: "PROVISIONED",
     writes: statements.length,
-    userId,
-    orgId,
-    identityId,
+    userId: verified.userId,
+    orgId: verified.orgId,
+    identityId: verified.identityId,
   };
 }

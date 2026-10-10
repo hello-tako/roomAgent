@@ -38,3 +38,9 @@ Workflow engine logs during `pnpm test` included `NonRetryableError`, hang cance
 The first planner run inside the full log executed 3 Python tests. A harness-binding guard was added after that log line. A second run of `python3 scripts/test-staging-bootstrap.py` executed 4 tests and passed. JavaScript sources did not change between those runs.
 
 `scripts/d1_preflight.py config` still reports `DO_REMOTE_PROVISIONING_NOT_PERFORMED: true`. That flag is a static checker constant. It is not a claim that the live staging Worker has no Durable Objects. This run did not change that checker and did not deploy.
+
+## F01–F05 remediation run
+
+The same command list was run again after the approval-token, release SHA, migration ledger, role-permission, harness, and binding checks. JavaScript totals stayed 161 because the new assertions sit inside existing tests: domain 14, policy 15, schemas 2, API 130 across 39 files. Python migration tests stayed 11. D1 preflight tests are 19. Staging bootstrap planner tests are 6. `d1_preflight.py manifest` and `config` returned PASS. Wrangler 4.148.0 dry-run of `wrangler.staging.jsonc` printed `STAGING_RUNTIME` as `cloudflare` and exited at `--dry-run: exiting now`. It did not publish. `worker-configuration.d.ts` did not change. `apps/api/wrangler.jsonc` and migrations `0001`–`0015` did not change.
+
+The same workflow-engine logs appeared (`NonRetryableError`, hang cancellation, dead-letter warnings). The process exit code was 0. Those logs are not a harness bypass.

@@ -18,6 +18,7 @@ export default defineConfig(async () => {
             STAGING_ACCOUNT_ID: "ef250a88911fd24073cb73d1c07e0218",
             STAGING_DATABASE_ID: "a6b8c2f6-d697-442b-8374-5006246324b2",
             STAGING_DATABASE_NAME: "ai-company-os-staging",
+            BOOTSTRAP_LOCAL_HARNESS: "vitest",
           },
         },
       }),

@@ -8,7 +8,7 @@ Muse and CUE are replaceable execution runtimes. They are not the employee recor
 
 Phase 0 discovery through Phase 10 company POC records are in this repository. The six-agent company test ran locally on browser sessions. Muse and CUE were not contacted.
 
-Historical certification: `AI_COMPANY_OS_POC_PARTIAL`. Baseline `main` for Stage C is `3528f923692b53c80559ba55a7101773e9a8bd1b`. `https://ai.tungjp.store` serves the 2026-10-08 Worker. `https://api-staging.tungjp.store` is the 2026-10-10 staging Worker behind Cloudflare Access. Neither hostname is a production certification or a Muse session. Stage C bootstrap and smoke code on `feat/stage-c-bootstrap-smoke-v1` is local until a reviewed merge and a separate staging deploy. See [docs/reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md](docs/reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md).
+Historical certification: `AI_COMPANY_OS_POC_PARTIAL`. Baseline `main` for Stage C is `3528f923692b53c80559ba55a7101773e9a8bd1b`. `https://ai.tungjp.store` serves the 2026-10-08 Worker. `https://api-staging.tungjp.store` is the 2026-10-10 staging Worker behind Cloudflare Access. Neither hostname is a production certification or a Muse session. Stage C bootstrap and smoke code is on open pull request 5 (`feat/stage-c-bootstrap-smoke-v1`). Review is blocked until an independent approval of the final head. It is not merged and not deployed. See [docs/reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md](docs/reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md).
 
 - Current runtime: [docs/reports/current-runtime.md](docs/reports/current-runtime.md)
 - Remediation ledger: [docs/reports/architecture-remediation-v1.md](docs/reports/architecture-remediation-v1.md)

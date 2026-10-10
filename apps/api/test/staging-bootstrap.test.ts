@@ -1,16 +1,24 @@
 import {
   applyStagingBootstrap,
   bootstrapPlanDigest,
+  EXPECTED_MIGRATION_NAMES,
+  migrationLedgerDenial,
   PUBLIC_D1_DATABASE_ID,
   PUBLIC_DATABASE_NAME,
   PLACEHOLDER_D1_DATABASE_ID,
+  releaseShaDenial,
+  roleAssignmentDenial,
   STAGING_ACCOUNT_ID,
   STAGING_D1_DATABASE_ID,
   type BootstrapPlan,
 } from "@ai-company/db";
 import { env, exports } from "cloudflare:workers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { stagingBootstrapEnabled } from "../src/staging-bootstrap-route";
+import {
+  approvalAuthorized,
+  bootstrapHarnessAllowed,
+  stagingBootstrapEnabled,
+} from "../src/staging-bootstrap-route";
 import { createStudio } from "./helpers";
 
 const TEAM = "https://roomagent-test.cloudflareaccess.com";
@@ -238,6 +246,104 @@ describe("staging owner bootstrap", () => {
       approvalDigest: await bootstrapPlanDigest(remote),
     });
     expect(blocked.reason).toBe("REMOTE_NOT_AUTHORIZED");
+    const releaseBlocked = await applyStagingBootstrap(env.DB, remote, {
+      approvalDigest: await bootstrapPlanDigest(remote),
+      remoteAuthorized: true,
+      independentApproval: true,
+      approvedReleaseSha: "ab".repeat(20),
+    });
+    expect(releaseBlocked).toMatchObject({ reason: "RELEASE_SHA_MISMATCH", writes: 0 });
+    expect(releaseShaDenial(remote, null)).toBe("RELEASE_SHA_NOT_PINNED");
+    expect(releaseShaDenial(remote, remote.repositorySha)).toBeNull();
+    const names = await env.DB.prepare(`SELECT name FROM d1_migrations ORDER BY id`)
+      .all<{ name: string }>()
+      .then((page) => page.results.map((row) => row.name));
+    expect(migrationLedgerDenial(names)).toBeNull();
+    expect(migrationLedgerDenial(EXPECTED_MIGRATION_NAMES.slice(0, 10))).toBe("SCHEMA_INCOMPLETE");
+    expect(migrationLedgerDenial([...EXPECTED_MIGRATION_NAMES, "0016_extra.sql"])).toBe(
+      "SCHEMA_DRIFT",
+    );
+    expect(roleAssignmentDenial([])).toBe("ROLE_TEMPLATE_CONFLICT");
+    expect(
+      roleAssignmentDenial([
+        { code: "owner", permission: "task.read" },
+        { code: "executive", permission: "task.read" },
+        { code: "manager", permission: "task.read" },
+        { code: "employee", permission: "task.read" },
+        { code: "qa", permission: "task.read" },
+        { code: "security", permission: "task.read" },
+        { code: "auditor", permission: "task.read" },
+      ]),
+    ).toBe("ROLE_PERMISSION_CONFLICT");
+    const digest = "ab".repeat(32);
+    const token = "cd".repeat(32);
+    expect(
+      approvalAuthorized({
+        providedDigest: digest,
+        planDigest: digest,
+        providedToken: token,
+        tokenSecret: token,
+        digestSecret: digest,
+        harness: false,
+      }).ok,
+    ).toBe(true);
+    expect(
+      approvalAuthorized({
+        providedDigest: digest,
+        planDigest: digest,
+        providedToken: digest,
+        tokenSecret: digest,
+        digestSecret: digest,
+        harness: false,
+      }).reason,
+    ).toBe("APPROVAL_TOKEN_DERIVED");
+    expect(
+      approvalAuthorized({
+        providedDigest: digest,
+        planDigest: digest,
+        providedToken: "",
+        tokenSecret: undefined,
+        digestSecret: undefined,
+        harness: false,
+      }).reason,
+    ).toBe("APPROVAL_TOKEN_MISSING");
+    expect(
+      bootstrapHarnessAllowed({ TEST_MIGRATIONS: [], BOOTSTRAP_LOCAL_HARNESS: "vitest" }),
+    ).toBe(true);
+    expect(
+      bootstrapHarnessAllowed({
+        TEST_MIGRATIONS: [],
+        BOOTSTRAP_LOCAL_HARNESS: "vitest",
+        STAGING_RUNTIME: "cloudflare",
+      }),
+    ).toBe(false);
+    expect(bootstrapHarnessAllowed({ TEST_MIGRATIONS: [] })).toBe(false);
+    const cloudflareHarness = {
+      TEST_MIGRATIONS: [],
+      BOOTSTRAP_LOCAL_HARNESS: "vitest",
+      STAGING_RUNTIME: "cloudflare",
+    };
+    expect(bootstrapHarnessAllowed(cloudflareHarness)).toBe(false);
+    expect(
+      approvalAuthorized({
+        providedDigest: digest,
+        planDigest: digest,
+        providedToken: "",
+        tokenSecret: undefined,
+        digestSecret: undefined,
+        harness: bootstrapHarnessAllowed(cloudflareHarness),
+      }).reason,
+    ).toBe("APPROVAL_TOKEN_MISSING");
+    expect(
+      approvalAuthorized({
+        providedDigest: token,
+        planDigest: digest,
+        providedToken: token,
+        tokenSecret: token,
+        digestSecret: digest,
+        harness: true,
+      }).reason,
+    ).toBe("APPROVAL_DIGEST_MISMATCH");
     expect(stagingBootstrapEnabled(undefined)).toBe(false);
     expect(stagingBootstrapEnabled("enabled")).toBe(true);
   });
@@ -261,8 +367,20 @@ describe("staging owner bootstrap", () => {
       },
     );
     expect(response.status).toBe(200);
-    const created = await response.json<{ org_id: string; user_id: string; writes: number }>();
+    const created = await response.json<{
+      org_id: string;
+      user_id: string;
+      writes: number;
+      retirement: { after: string; remove_var: string; remove_secrets: string[] };
+      database_binding_checked_by_route: boolean;
+    }>();
     expect(created.writes).toBeGreaterThan(0);
+    expect(created.retirement).toEqual({
+      after: "VERIFIED",
+      remove_var: "STAGING_OPERATOR_BOOTSTRAP",
+      remove_secrets: ["BOOTSTRAP_APPROVAL_TOKEN", "BOOTSTRAP_APPROVAL_DIGEST"],
+    });
+    expect(created.database_binding_checked_by_route).toBe(false);
 
     const emailOnly = await exports.default.fetch(
       "https://company.local/operator/staging-bootstrap",

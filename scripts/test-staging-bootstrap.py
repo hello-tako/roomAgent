@@ -57,7 +57,54 @@ class StagingBootstrapGuardTest(unittest.TestCase):
                 "TEST_MIGRATIONS": "present",
             },
         }
-        self.assertIn("TEST_HARNESS_MUST_NOT_BE_IN_CONFIG", sb.target_reasons(staging))
+        reasons = sb.target_reasons(staging)
+        self.assertIn("TEST_MIGRATIONS_MUST_NOT_BE_IN_CONFIG", reasons)
+        self.assertIn("STAGING_RUNTIME_NOT_PINNED", reasons)
+
+    def test_secrets_and_harness_markers_cannot_live_in_vars(self):
+        staging = {
+            "name": sb.STAGING_WORKER,
+            "account_id": sb.STAGING_ACCOUNT,
+            "workers_dev": False,
+            "d1_databases": [
+                {"database_name": sb.STAGING_NAME, "database_id": sb.STAGING_D1},
+            ],
+            "vars": {
+                "STAGING_OPERATOR_BOOTSTRAP": "enabled",
+                "STAGING_RUNTIME": "cloudflare",
+                "STAGING_ACCOUNT_ID": sb.STAGING_ACCOUNT,
+                "STAGING_DATABASE_ID": sb.STAGING_D1,
+                "STAGING_DATABASE_NAME": sb.STAGING_NAME,
+                "BOOTSTRAP_APPROVAL_TOKEN": "ab" * 32,
+                "BOOTSTRAP_LOCAL_HARNESS": "vitest",
+                "STAGING_RELEASE_SHA": "ab" * 20,
+            },
+        }
+        reasons = sb.target_reasons(staging)
+        self.assertIn("BOOTSTRAP_APPROVAL_TOKEN_MUST_NOT_BE_IN_CONFIG", reasons)
+        self.assertIn("BOOTSTRAP_LOCAL_HARNESS_MUST_NOT_BE_IN_CONFIG", reasons)
+        self.assertIn("STAGING_RELEASE_SHA_MUST_NOT_BE_IN_CONFIG", reasons)
+
+    def test_a_public_binding_hidden_behind_staging_vars_is_rejected(self):
+        staging = {
+            "name": sb.STAGING_WORKER,
+            "account_id": sb.STAGING_ACCOUNT,
+            "workers_dev": False,
+            "d1_databases": [
+                {"database_name": sb.PUBLIC_NAME, "database_id": sb.PUBLIC_D1},
+            ],
+            "vars": {
+                "STAGING_OPERATOR_BOOTSTRAP": "enabled",
+                "STAGING_RUNTIME": "cloudflare",
+                "STAGING_ACCOUNT_ID": sb.STAGING_ACCOUNT,
+                "STAGING_DATABASE_ID": sb.STAGING_D1,
+                "STAGING_DATABASE_NAME": sb.STAGING_NAME,
+            },
+        }
+        reasons = sb.target_reasons(staging)
+        self.assertIn("DATABASE_BINDING_VAR_DIVERGENCE", reasons)
+        self.assertIn("D1_DATABASE_UUID_MISMATCH", reasons)
+        self.assertIn("PROTECTED_PUBLIC_DATABASE_TARGETED", reasons)
 
     def test_a_matching_remote_plan_still_does_not_write(self):
         import hashlib
