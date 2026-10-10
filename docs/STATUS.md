@@ -1,13 +1,28 @@
 # Status
 
+## Current runtime
+
+Recorded: 2026-10-10. `main` is `6cf1db7` on https://github.com/takovn2/roomAgent.
+`origin` is still `https://github.com/vn-tak/roomAgent.git`, and GitHub resolves it to `takovn2/roomAgent`.
+
+Certification stays `AI_COMPANY_OS_POC_PARTIAL`. The detail is [current-runtime.md](reports/current-runtime.md).
+
+| Surface                            | What is live                                                                                                                                                                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `https://ai.tungjp.store`          | Worker `ai-company-os-api` version `a7acb953-ebae-46f8-9757-841100e121be`, uploaded 2026-10-08. `GET /health` returned HTTP 200. D1 `ai-company-os` has migrations `0001`–`0010`. This build is older than `main`.     |
+| `https://api-staging.tungjp.store` | Worker `ai-company-os-api-staging` version `3aeb3cbc-0f44-470c-af2c-30ab64d1bc55`, uploaded 2026-10-10. Cloudflare Access returns HTTP 302 before the Worker. D1 `ai-company-os-staging` has migrations `0001`–`0015`. |
+
+`apps/api/wrangler.jsonc` on `main` is still the local placeholder. The public hostname was deployed from an earlier tree. Do not deploy the current placeholder file onto `ai.tungjp.store`. CI for `6cf1db7` passed. Muse and CUE were not contacted.
+
 ## Staging P1 remediation
 
 State: `ROOMAGENT_STAGING_P1_REMEDIATION_AWAITING_INDEPENDENT_REVIEW`.
 
 P1-01 through P1-05 are implemented with local regression coverage on top of the merged
 remediation v1 (`main` `dee1e56`). The record is
-[staging-p1-remediation.md](reports/staging-p1-remediation.md). Nothing was deployed or
-provisioned. Staging is not ready until an operator provisions it and the remote checks pass.
+[staging-p1-remediation.md](reports/staging-p1-remediation.md). That record said nothing was
+deployed. The live account on 2026-10-10 is in Current runtime above. This status update does
+not close the review gate.
 
 ## Architecture remediation v1
 
@@ -15,12 +30,13 @@ State: `ROOMAGENT_REMEDIATION_IMPLEMENTED_AWAITING_INDEPENDENT_REVIEW`.
 
 Implementation is on `fix/architecture-remediation-v1`, based on the reviewed publication commit.
 R1–R17 have local regression coverage: 135 tests / 41 files PASS, plus two migration checks.
-Exact-head CI evidence is recorded on the remediation PR; no merge or deployment is authorized.
-The implementation and exact-head verification ledger is
+Exact-head CI evidence is recorded on the remediation PR. That record said no merge or
+deployment was authorized. The work is now on `main` at `6cf1db7`. See Current runtime for
+what is actually uploaded. The implementation ledger is
 [architecture-remediation-v1.md](reports/architecture-remediation-v1.md).
 Historical phase gates below are not evidence for the new remediation.
 
-No staging/production deployment, remote Cloudflare mutation, or Muse/CUE contact is authorized.
+This status update does not authorize a new deploy and does not contact Muse or CUE.
 
 ## Historical baseline (superseded where noted)
 

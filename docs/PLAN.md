@@ -1,6 +1,6 @@
 # Plan
 
-Recorded: 2026-10-09
+Recorded: 2026-10-09. Runtime checked again on 2026-10-10 in [current-runtime.md](reports/current-runtime.md).
 
 The numbered build order in the master plan is P0 through P10. Those ten implementation phases have local gates. This plan says what that means, what is still open, and what a later session may do.
 
@@ -20,7 +20,7 @@ The numbered build order in the master plan is P0 through P10. Those ten impleme
 | P9    | One `ProductionTaskWorkflow`. Human approval waits on `waitForEvent`.        | `PHASE9_DURABLE_WORKFLOW_PASS`  |
 | P10   | Six-employee company proof on browser sessions.                              | `PHASE10_COMPANY_POC_PASS`      |
 
-Policies that already constrain the code: test layers, format/lint/typecheck/test gates, forward-only local migrations, no secrets in the repo, no production deploy, structured denials, and the threat model.
+Policies that already constrain the code: test layers, format/lint/typecheck/test gates, forward-only migrations, no secrets in the repo, structured denials, and the threat model. Two Workers are already uploaded. See [current-runtime.md](reports/current-runtime.md) before any further deploy.
 
 ## Certification
 
@@ -33,8 +33,9 @@ State: `AI_COMPANY_OS_POC_PARTIAL`.
 Architecture remediation v1 closes the independent review findings without a rewrite.
 Its implementation ledger and local/CI evidence are in
 [architecture-remediation-v1.md](reports/architecture-remediation-v1.md).
-Independent review is the next gate. No merge, deploy, remote resource creation,
-UI work, or live Muse/CUE integration is part of this task.
+The remediation and staging P1 branches are merged on `main` `6cf1db7`. The review
+gate tokens in `docs/STATUS.md` are still open. This plan does not start a UI or a
+live Muse/CUE integration.
 
 Remaining product work after independent review requires a new explicit request:
 human identity-provider/login integration (the minimal session has trusted internal
@@ -47,10 +48,11 @@ and per-artifact or artifact shards. No premature sharding is performed here.
 
 ## Next safe step
 
-Independent review of the remediation PR is next. Keep the branch unmerged and
-undeployed. Product work requires a new explicit request after review: human
-login integration, then any UI or approved runtime adapter. Budget guards and
-the bounded audit replay are part of this remediation, not deferred next-session work.
+Read [current-runtime.md](reports/current-runtime.md) before the next deploy. The
+public hostname still runs the 2026-10-08 Worker, and `apps/api/wrangler.jsonc` does
+not describe it. Product work still needs an explicit request: human login
+integration, then any UI or approved runtime adapter. Budget guards and the bounded
+audit replay are part of the merged remediation, not deferred next-session work.
 
 ## Safety rules that stay in force
 

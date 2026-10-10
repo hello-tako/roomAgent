@@ -8,10 +8,10 @@ Muse and CUE are replaceable execution runtimes. They are not the employee recor
 
 Phase 0 discovery through Phase 10 company POC records are in this repository. The six-agent company test ran locally on browser sessions. Muse and CUE were not contacted.
 
-Historical certification: `AI_COMPANY_OS_POC_PARTIAL`. Architecture remediation v1 is implemented awaiting independent review (`ROOMAGENT_REMEDIATION_IMPLEMENTED_AWAITING_INDEPENDENT_REVIEW`); neither the historical POC gate nor remediation implies production, staging, or Muse readiness.
+Historical certification: `AI_COMPANY_OS_POC_PARTIAL`. `main` is `6cf1db7`. `https://ai.tungjp.store` serves the 2026-10-08 Worker. `https://api-staging.tungjp.store` is the 2026-10-10 staging Worker behind Cloudflare Access. Neither hostname is a production certification or a Muse session.
 
+- Current runtime: [docs/reports/current-runtime.md](docs/reports/current-runtime.md)
 - Remediation ledger: [docs/reports/architecture-remediation-v1.md](docs/reports/architecture-remediation-v1.md)
-
 - Current state: [docs/STATUS.md](docs/STATUS.md)
 - Remaining plan: [docs/PLAN.md](docs/PLAN.md)
 - Review package: [docs/reports/publication.md](docs/reports/publication.md)
@@ -29,9 +29,9 @@ pnpm test
 python3 scripts/test-migrations.py
 ```
 
-D1 is local-only. The database id in `apps/api/wrangler.jsonc` is a placeholder.
+`pnpm test` stays on local bindings. `apps/api/wrangler.jsonc` is still the placeholder database and has no `"remote": true`. The live ids are in [docs/reports/current-runtime.md](docs/reports/current-runtime.md).
 
-Do not run `wrangler deploy` or `wrangler d1 migrations apply --remote` until a staging database is created on purpose. This Cloudflare account already holds unrelated production databases.
+Do not deploy `apps/api/wrangler.jsonc` onto `ai.tungjp.store`. That file would replace the Worker that is already there. Staging deploys use `apps/api/wrangler.staging.jsonc`. Leave unrelated account databases, buckets, and queues alone.
 
 ## Layout
 
