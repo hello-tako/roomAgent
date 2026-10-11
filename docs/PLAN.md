@@ -48,7 +48,7 @@ and per-artifact or artifact shards. No premature sharding is performed here.
 
 ## Next safe step
 
-Stage C local code is on `feat/stage-c-bootstrap-smoke-v1`. The next human gates are pull-request review, merge, then a separate staging deploy, then C1 bootstrap, then C2 business smoke. None of those remote steps is authorized by the local suite. Read [current-runtime.md](reports/current-runtime.md) and [stage-c/06_STAGING_DEPLOYMENT_PLAN.md](reports/stage-c/06_STAGING_DEPLOYMENT_PLAN.md) before any deploy. The public hostname still runs the 2026-10-08 Worker, and `apps/api/wrangler.jsonc` does not describe it. Muse and CUE stay unimplemented.
+Stage C source was merged through PR #5 at `3909fada8747ae27ea71daf6da9481a7eb8d9eff` with exact-main CI success; the former open-PR state is obsolete. C1-A2 operator hardening is implemented on `fix/roomagent-c1-a2-security-hardening` and requires Muse review of its own exact commit/manifests, then separate human owner mutation approval. Read [the independent review package](reports/stage-c/C1_A2_INDEPENDENT_REVIEW_PACKAGE.md). No deploy, C1 bootstrap, C2 smoke, retirement or production certification follows from code merge/CI. Current live runtime state must be re-observed separately; Muse/CUE product adapters remain unimplemented.
 
 ## Safety rules that stay in force
 

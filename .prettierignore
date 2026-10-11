@@ -4,3 +4,5 @@ dist
 pnpm-lock.yaml
 worker-configuration.d.ts
 .hoplite/
+handoff/**/private/
+c1-operator/private/

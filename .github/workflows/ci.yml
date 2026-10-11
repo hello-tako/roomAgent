@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -16,12 +19,21 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # Hosted toolcache Node can be shared-writable; executable pins reject that.
+      - name: Protect hosted Node executable
+        run: |
+          node_path="$(node -p 'require("node:fs").realpathSync(process.execPath)')"
+          chmod go-w "$node_path"
+          stat -c 'Hosted Node executable mode: %a' "$node_path"
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @ai-company/api types
       - run: pnpm format
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm test:operator
+      - run: node handoff/c1-a2/operator/secret-safety.mjs
+      - run: node handoff/c1-a2/operator/c1-runner.mjs --verify-bundle
       - run: python3 scripts/test-migrations.py
       - run: python3 scripts/test-d1-preflight.py
       - run: python3 scripts/test-staging-bootstrap.py
@@ -29,3 +41,5 @@ jobs:
       - run: python3 scripts/d1_preflight.py config
       # Local bundle/config validation only; no credentials exist in CI and nothing is deployed.
       - run: pnpm --filter @ai-company/api exec wrangler deploy --dry-run --config wrangler.staging.jsonc --outdir "$RUNNER_TEMP/staging-dry-run"
+        env:
+          WRANGLER_SEND_METRICS: "false"

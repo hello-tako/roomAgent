@@ -1,0 +1,28 @@
+# Template only. Method consent, CI success and chat are not mutation authority.
+# Muse reviews the exact implementation; only the human owner may issue APPROVED.
+# Store the completed record as private/c1-owner-approval.txt (0600), private directory 0700.
+# Copy SHA/digest from the independent review record, not from a locally regenerated manifest.
+# source_sha is the Worker release, never the operator implementation SHA.
+action=ROOMAGENT_STAGE_C1_SYNTHETIC_BOOTSTRAP
+approval_request_ref=c1req-6c20d8157fe67e44067cd246
+canonical_plan_digest=971425db70d25b830d7fc75146298a07c43f4ff69547a999ffeb89e2e7b5f173
+source_sha=3909fada8747ae27ea71daf6da9481a7eb8d9eff
+base_version=cd03f994-9bc8-4aca-84c0-0f11ce9e0b8d
+base_deployment=7e523eba-cc34-4a67-9d5d-5eb47a6e4e32
+account_id=ef250a88911fd24073cb73d1c07e0218
+worker_id=0e5cfb1a28814e60a4e2f7ce5210db6e
+worker=ai-company-os-api-staging
+d1=a6b8c2f6-d697-442b-8374-5006246324b2
+secret_transport=A2
+human_owner_approval=PENDING
+implementation_sha=<REVIEWED_FULL_40_HEX_COMMIT_SHA>
+operator_bundle_sha256=<OWNER_PINNED_BUNDLE_MANIFEST_SHA256>
+node_path=<CANONICAL_ABSOLUTE_EXECUTABLE_PATH>
+node_sha256=<APPROVED_EXECUTABLE_SHA256>
+node_version=<EXACT_APPROVED_VERSION>
+git_path=<CANONICAL_ABSOLUTE_EXECUTABLE_PATH>
+git_sha256=<APPROVED_EXECUTABLE_SHA256>
+git_version=<EXACT_APPROVED_VERSION>
+cloudflared_path=<CANONICAL_ABSOLUTE_EXECUTABLE_PATH>
+cloudflared_sha256=<APPROVED_EXECUTABLE_SHA256>
+cloudflared_version=<EXACT_APPROVED_VERSION>

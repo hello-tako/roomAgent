@@ -10,3 +10,6 @@ coverage
 !.env.example
 .hoplite/
 __pycache__/
+handoff/c1-a2/operator/private/
+handoff/**/private/
+c1-operator/private/
