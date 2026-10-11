@@ -1,15 +1,19 @@
 # C1-A2 independent review package — Muse
 
-Status: implementation handoff only. **Muse review/GATE B and human mutation approval are PENDING.** Hoplite is not the independent reviewer or production operator. No live runtime or production certification is issued.
+Status: implementation handoff only. **Review of the updated source and human mutation approval are PENDING.** The [Muse review](https://github.com/takovn2/roomAgent/pull/6#pullrequestreview-5481983056) approved the earlier `f7e5142` head; it is not approval of these follow-up changes. Hoplite is not the independent reviewer or production operator. No live runtime or production certification is issued.
 
 ## Exact evidence coordinates
 
 Repository `takovn2/roomAgent`, ID `1410359112`; branch `fix/roomagent-c1-a2-security-hardening`. Baseline main/Worker source `3909fada8747ae27ea71daf6da9481a7eb8d9eff`; original handoff `6fac326a7fd3f504a51c23372485af252012e2c8`. The implementation SHA, PR URL, exact-head CI run/job IDs and conclusion are in the PR/final handoff after commit. This avoids self-referential commit/manifests. Review the commit, not a mutable branch label.
 
-- Inner operator manifest SHA-256: `7eca37cca11f12cb8d20e0a00b773bb13e4c54b5f3031e23b8e646572a31343a`.
-- Outer bundle manifest SHA-256: `a6dbba6cd9a873118517b534917edc4904300c50810f403889571ff7f910c8b4`.
+- Inner operator manifest SHA-256: `7ff9c4be0199fce8c6e2aac0af07d7c34e99306182fe4d1bdd983f40e4220197`.
+- Outer bundle manifest SHA-256: `a0d8e31d1ccaea5ebbdb796e5080c209a3e578235b3b680e284e91052afcd79a`.
 - Detailed findings, source functions, test counts and limitations: [hardening report](C1_A2_SECURITY_HARDENING_REPORT.md).
 - Original main CI 38093203477 was SUCCESS; original handoff CI 38105477230 was FAILURE with later steps SKIPPED. Neither approves this new operator source.
+
+## Follow-up review focus
+
+Challenge the 900-second mandatory-`iat` freshness boundary, descriptor no-follow/type/inode checks and replacement cleanup, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
 
 ## Reviewer source order
 
@@ -47,6 +51,8 @@ Check exact remote head/base ancestry, new push/PR CI conclusions (not historica
 
 Muse must assess the documented owner-file/independent-pin trust boundary, same-owner filesystem/running-process assumptions, POSIX durability support, API non-atomicity/exclusive change window, background D1 writers, binary build pins, A2 plaintext token at-rest retention and revocation/rotation. The human owner must approve those and all future operational scope; Hoplite does not grant it.
 
+Review F3 remains a trust-model limit: a same-UID directory owner or root can remove attempt markers/private evidence and permit replay. Exclusive creation and fsync protect against crashes, races and retained markers, not deliberate owner deletion. Evidence retention is mandatory; independently controlled tamper-resistant storage would require a separate owner-approved design. The bounded credential scanner is also not comprehensive DLP. Neither limitation is claimed fixed by green tests or this report.
+
 Live Cloudflare permissions/resource state, Access forwarding/token/session, staging release/runtime, C1 76-write receipt, C2/business flow and production certification remain NOT_VERIFIED. No operator test or dry-run certifies a live identity/account/Worker/database. This task performed source/CI/GitHub delivery only, not Cloudflare mutations or merge.
 
 ## Authoritative protocol references
@@ -55,3 +61,4 @@ Live Cloudflare permissions/resource state, Access forwarding/token/session, sta
 - [Beta Worker Versions](https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/subresources/versions/): top-level version metadata and `include=modules`/`content_base64`.
 - [Deployment list](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/list/) and [create](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/create/): active-first deployment, percentage versions, no force.
 - [Access JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/) and [CLI guide](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/): client `cf-access-token`, Access-origin assertion, `cloudflared access token -app=...`. Wire behavior is documented/tested locally, not certified live here.
+- [D1 query API](https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/query/): optional string `params` bind the organization-name predicate without changing the read-only SQL allowlist.

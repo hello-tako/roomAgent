@@ -265,8 +265,11 @@ test("enforces expiration, not-before, issued-at, and the bounded clock skew", a
     ["invalid not-before", { nbf: "later" }, "TOKEN_NOT_YET_VALID"],
     ["not-before beyond skew", { nbf: NOW_SECONDS + 61 }, "TOKEN_NOT_YET_VALID"],
     ["not-before at expiration", { nbf: NOW_SECONDS + 600 }, "TOKEN_NOT_YET_VALID"],
+    ["missing issued-at", { iat: undefined }, "TOKEN_ISSUED_AT_INVALID"],
     ["invalid issued-at", { iat: "later" }, "TOKEN_ISSUED_AT_INVALID"],
+    ["non-integer issued-at", { iat: NOW_SECONDS - 60.5 }, "TOKEN_ISSUED_AT_INVALID"],
     ["issued-at beyond skew", { iat: NOW_SECONDS + 61 }, "TOKEN_ISSUED_AT_INVALID"],
+    ["issued-at older than maximum age", { iat: NOW_SECONDS - 901 }, "TOKEN_ISSUED_AT_INVALID"],
     ["issued-at at expiration", { iat: NOW_SECONDS + 600 }, "TOKEN_ISSUED_AT_INVALID"],
   ];
   for (const [name, claims, code] of cases) {
@@ -278,6 +281,10 @@ test("enforces expiration, not-before, issued-at, and the bounded clock skew", a
     const identity = validate(
       signedToken({ payload: validPayload({ nbf: NOW_SECONDS + 60, iat: NOW_SECONDS + 60 }) }),
     );
+    assert.equal(identity.subject, SUBJECT);
+  });
+  await t.test("accepts issued-at exactly at the maximum age", () => {
+    const identity = validate(signedToken({ payload: validPayload({ iat: NOW_SECONDS - 900 }) }));
     assert.equal(identity.subject, SUBJECT);
   });
 });
@@ -395,6 +402,24 @@ test("fetches only the pinned issuer certs endpoint without transmitting the JWT
     { method: "GET", headers: { accept: "application/json" }, redirect: "error" },
   ]);
   assert.ok(!JSON.stringify(calls[0]).includes(token));
+});
+
+test("rejects stale issued-at claims through asynchronous verification", async () => {
+  const token = signedToken({ payload: validPayload({ iat: NOW_SECONDS - 901 }) });
+  await assert.rejects(
+    verifyAccessJwt(token, {
+      fetchImpl: async () => response(200, JSON.stringify(JWKS)),
+      now: () => NOW_SECONDS * 1000,
+    }),
+    (error) => {
+      assert.equal(error.code, "TOKEN_ISSUED_AT_INVALID");
+      assert.equal(error.message, "TOKEN_ISSUED_AT_INVALID");
+      assert.ok(!error.message.includes(token));
+      assert.ok(!error.message.includes(EMAIL));
+      assert.ok(!error.message.includes(SUBJECT));
+      return true;
+    },
+  );
 });
 
 test("rejects certificate HTTP failures", async (t) => {
@@ -678,6 +703,29 @@ test("CLI sanitizes claim failures and does not leave a private record", (t) => 
   assert.ok(!result.stdout.includes(token));
   assert.ok(!result.stdout.includes(EMAIL));
   assert.equal(lstatSync(outputPath, { throwIfNoEntry: false }), undefined);
+});
+
+test("CLI rejects stale issued-at claims without revealing identity or writing a record", (t) => {
+  const fixture = makeCliFixture(t);
+  const expectedFile = createExpectedEmailFile(fixture);
+  const outputPath = join(fixture.privateDir, "stale.json");
+  const token = signedToken({ payload: validPayload({ iat: NOW_SECONDS - 901 }) });
+  const result = runCli(
+    fixture,
+    ["--private-out", outputPath, "--expected-email-sha256-file", expectedFile],
+    token,
+  );
+
+  assert.equal(result.status, 2);
+  assert.equal(result.stderr, "");
+  assert.deepEqual(JSON.parse(result.stdout), {
+    identity_attestation_status: "TOKEN_ISSUED_AT_INVALID",
+  });
+  assert.ok(!result.stdout.includes(token));
+  assert.ok(!result.stdout.includes(EMAIL));
+  assert.ok(!result.stdout.includes(SUBJECT));
+  assert.equal(lstatSync(outputPath, { throwIfNoEntry: false }), undefined);
+  assert.ok(lstatSync(fixture.tracePath, { throwIfNoEntry: false }));
 });
 
 test("CLI rejects outside paths, symlinks, and existing files without removing them", (t) => {

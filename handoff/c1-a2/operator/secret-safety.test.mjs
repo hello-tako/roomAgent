@@ -91,6 +91,75 @@ test("tracked private directories fail closed without reading their content", ()
   ]);
 });
 
+test("traversal and separator aliases cannot hide tracked private directories", () => {
+  const entries = [
+    {
+      path: "public/../handoff/another-bundle/private/receipt.json",
+      content: "MOCK_PRIVATE_TRAVERSAL_CANARY",
+    },
+    {
+      path: "public\\..\\c1-operator\\private\\session.json",
+      content: "MOCK_PRIVATE_SEPARATOR_CANARY",
+    },
+    {
+      path: "c1-operator/public/../private/record.txt",
+      content: "MOCK_PRIVATE_DOT_SEGMENT_CANARY",
+    },
+  ];
+
+  assert.deepEqual(findingsFor(entries), [
+    {
+      code: "TRACKED_PRIVATE_PATH",
+      path: "c1-operator/private/record.txt",
+    },
+    {
+      code: "TRACKED_PRIVATE_PATH",
+      path: "c1-operator/private/session.json",
+    },
+    {
+      code: "TRACKED_PRIVATE_PATH",
+      path: "handoff/another-bundle/private/receipt.json",
+    },
+  ]);
+});
+
+test("traversal out of private directories still scans the resolved public path", () => {
+  const canary = ["MOCK", "TRAVERSAL", "TOKEN", "CANARY", "82d9"].join("_");
+  const content = `SESSION_TOKEN=${canary}`;
+  const publicPaths = [
+    {
+      path: "handoff/private/../../public/receipt.json",
+      canonicalPath: "public/receipt.json",
+    },
+    {
+      path: "handoff\\private\\..\\..\\public\\windows-receipt.json",
+      canonicalPath: "public/windows-receipt.json",
+    },
+  ];
+
+  for (const { path, canonicalPath } of publicPaths) {
+    const findings = findingsFor([{ path, content }]);
+    assert.deepEqual(findings, [
+      {
+        code: "SENSITIVE_CREDENTIAL_ASSIGNMENT",
+        path: canonicalPath,
+      },
+    ]);
+    assert.equal(JSON.stringify(findings).includes(canary), false);
+  }
+});
+
+test("paths that escape the tracked root fail closed as unreadable", () => {
+  const path = "../handoff/c1-a2/operator/private/record.json";
+
+  assert.deepEqual(findingsFor([{ path, content: "clean fixture" }]), [
+    {
+      code: "TRACKED_FILE_UNREADABLE",
+      path,
+    },
+  ]);
+});
+
 test("private operator artifacts are detected outside private directories", () => {
   const paths = [
     "handoff/c1-a2/operator/c1-access-attestation.json",
@@ -320,6 +389,12 @@ test("the checked-in ignore rules protect private directories from git add -A", 
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   assert.equal(result.status, 1, "CLI should fail when an ignored private path is already tracked");
   assert.ok(output.includes("TRACKED_PRIVATE_PATH"), "CLI should report the private-path code");
+  const privatePathDigest = createHash("sha256").update(privateFiles[0]).digest("hex");
+  assert.ok(
+    output.includes(`path_sha256=${privatePathDigest}`),
+    "CLI should hash private paths in diagnostics",
+  );
+  assert.equal(output.includes(privateFiles[0]), false, "CLI should not expose private paths");
   assert.equal(
     output.includes("temporary fixture"),
     false,
@@ -389,3 +464,35 @@ test("the CLI scans tracked and untracked bundle paths without printing canaries
   );
   assert.equal(output.includes(privateCanary), false, "CLI output must omit private file contents");
 });
+
+test(
+  "the CLI reads literal-backslash Git filenames instead of their clean slash aliases",
+  { skip: process.platform === "win32" },
+  () => {
+    const directory = makeTemporaryDirectory();
+    const literalBackslashPath = "public\\clean.md";
+    const slashPath = "public/clean.md";
+    const canary = ["MOCK", "BACKSLASH", "TOKEN", "CANARY", "c0a6"].join("_");
+    git(["init", "-q"], directory);
+    mkdirSync(dirname(join(directory, slashPath)), { recursive: true });
+    writeFileSync(join(directory, literalBackslashPath), `SESSION_TOKEN=${canary}\n`);
+    writeFileSync(join(directory, slashPath), "clean public fixture\n");
+    git(["add", "--", literalBackslashPath, slashPath], directory);
+
+    const result = spawnSync(process.execPath, [SCRIPT_PATH], {
+      cwd: directory,
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+
+    assert.equal(result.status, 1, "CLI should detect the literal-backslash file canary");
+    assert.ok(
+      output.includes("SENSITIVE_CREDENTIAL_ASSIGNMENT"),
+      "CLI should report the sensitive value in the literal-backslash file",
+    );
+    assert.equal(output.includes(canary), false, "CLI output must omit credential values");
+    const pathDigest = createHash("sha256").update(slashPath).digest("hex");
+    assert.ok(output.includes(`path_sha256=${pathDigest}`), "CLI should hash the reported path");
+  },
+);

@@ -382,10 +382,12 @@ export function makeCf(ctx) {
       throw new Stop(mutation ? "UNKNOWN_OUTCOME" : "CF_RESPONSE_INVALID");
     return json.result;
   }
-  async function d1(sql) {
+  async function d1(sql, params = []) {
     assertReadOnlySql(sql);
+    if (!Array.isArray(params)) throw new Stop("D1_PARAMS_INVALID");
+    for (const value of params) if (typeof value !== "string") throw new Stop("D1_PARAMS_INVALID");
     const result = await request("POST", `/accounts/${cfg.accountId}/d1/database/${cfg.d1}/query`, {
-      body: { sql },
+      body: params.length ? { sql, params } : { sql },
     });
     const r = result?.[0];
     if (!r || r.meta?.changed_db !== false || r.meta?.rows_written !== 0)
@@ -554,9 +556,9 @@ export async function d1State(cf, cfg, expected, label) {
     throw new Stop(`${label}_LEDGER_MISMATCH`);
   const fk = await cf.d1("PRAGMA foreign_key_check");
   if (fk.length !== 0) throw new Stop(`${label}_FOREIGN_KEY_VIOLATION`);
-  const orgName = cfg.orgName.replace(/'/g, "''");
   const [c] = await cf.d1(
-    `SELECT (SELECT COUNT(*) FROM organizations WHERE name = '${orgName}') AS org_named, (SELECT COUNT(*) FROM organizations) AS org_total, (SELECT COUNT(*) FROM human_users) AS human_users, (SELECT COUNT(*) FROM human_identities) AS identities, (SELECT COUNT(*) FROM roles) AS roles, (SELECT COUNT(*) FROM role_permissions) AS role_permissions, (SELECT COUNT(*) FROM employees) AS employees, (SELECT COUNT(*) FROM rooms) AS rooms, (SELECT COUNT(*) FROM tasks) AS tasks, (SELECT COUNT(*) FROM permissions) AS permissions`,
+    "SELECT (SELECT COUNT(*) FROM organizations WHERE name = ?) AS org_named, (SELECT COUNT(*) FROM organizations) AS org_total, (SELECT COUNT(*) FROM human_users) AS human_users, (SELECT COUNT(*) FROM human_identities) AS identities, (SELECT COUNT(*) FROM roles) AS roles, (SELECT COUNT(*) FROM role_permissions) AS role_permissions, (SELECT COUNT(*) FROM employees) AS employees, (SELECT COUNT(*) FROM rooms) AS rooms, (SELECT COUNT(*) FROM tasks) AS tasks, (SELECT COUNT(*) FROM permissions) AS permissions",
+    [cfg.orgName],
   );
   const safe = {};
   for (const k of Object.keys(cfg.prestate)) {
