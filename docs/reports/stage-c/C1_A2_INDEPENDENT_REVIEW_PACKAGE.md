@@ -17,6 +17,8 @@ PR #6 was owner-merged before these fixes were delivered. They are published sep
 
 Challenge the 900-second mandatory-`iat` freshness boundary, descriptor no-follow/type/inode checks and replacement cleanup, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
 
+Also inspect `apps/api/test/room-task-boundary.test.ts`: the CI fixture waits for exact legitimate setup event projections before taking no-side-effect snapshots. The original denied-command/replay assertions are retained; runtime task-room guards are unchanged.
+
 ## Reviewer source order
 
 1. `handoff/c1-a2/operator/c1-runner.mjs`: argument modes; pre-credential approval/source gates; canonical 17-field plan; exact Cloudflare allowlists/result schemas/SQL guards; W1 live body/rechecks; W2 active/latest/deployment checks; B1 fresh attestation after confirmation; no-force/no-retry; sanitized failure/receipt and read-only reconciliation.

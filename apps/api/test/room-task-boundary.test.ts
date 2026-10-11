@@ -50,6 +50,25 @@ async function pump(): Promise<void> {
   }
 }
 
+async function waitForProjectedEvents(orgId: string, expected: number): Promise<void> {
+  await vi.waitFor(
+    async () => {
+      await pump();
+      const domain = await env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM domain_events WHERE org_id = ?`,
+      )
+        .bind(orgId)
+        .first<{ n: number }>();
+      const audit = await env.DB.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE org_id = ?`)
+        .bind(orgId)
+        .first<{ n: number }>();
+      expect(domain?.n).toBe(expected);
+      expect(audit?.n).toBe(expected);
+    },
+    { timeout: 8_000, interval: 20 },
+  );
+}
+
 async function connect(orgId: string, roomId: string): Promise<WebSocket> {
   const response = await exports.default.fetch(
     `https://company.local/orgs/${orgId}/rooms/${roomId}/socket`,
@@ -113,6 +132,7 @@ describe("canonical task room boundary", () => {
       { command: "start" as const, state: "ACKNOWLEDGED" },
       { command: "submit" as const, state: "WORKING" },
     ];
+    let expectedEvents = 0;
     for (const [index, scenario] of scenarios.entries()) {
       const created = await execute(
         studio.org.id,
@@ -151,6 +171,7 @@ describe("canonical task room boundary", () => {
           )
         ).decision,
       ).toBe("ALLOW");
+      expectedEvents += 3;
       if (scenario.command !== "ack") {
         expect(
           (
@@ -164,6 +185,7 @@ describe("canonical task room boundary", () => {
             )
           ).decision,
         ).toBe("ALLOW");
+        expectedEvents += 1;
       }
       if (scenario.command === "submit") {
         expect(
@@ -178,12 +200,14 @@ describe("canonical task room boundary", () => {
             )
           ).decision,
         ).toBe("ALLOW");
+        expectedEvents += 1;
       }
       const beforeTask = await env.DB.prepare(`SELECT state FROM tasks WHERE org_id = ? AND id = ?`)
         .bind(studio.org.id, taskId)
         .first<{ state: string }>();
       expect(beforeTask?.state).toBe(scenario.state);
-      await pump();
+      // Command responses precede queue projection; settle setup before the snapshots.
+      await waitForProjectedEvents(studio.org.id, expectedEvents);
       const beforeDomain = await env.DB.prepare(
         `SELECT COUNT(*) AS n FROM domain_events WHERE org_id = ?`,
       )
@@ -270,7 +294,8 @@ describe("canonical task room boundary", () => {
           decision: "ALLOW",
           state: "ACKNOWLEDGED",
         });
-        await pump();
+        expectedEvents += 1;
+        await waitForProjectedEvents(studio.org.id, expectedEvents);
         const replayDomain = await env.DB.prepare(
           `SELECT COUNT(*) AS n FROM domain_events WHERE org_id = ?`,
         )

@@ -62,6 +62,8 @@ Initial implementation CI runs `38110988724` and `38110991601` failed the operat
 
 The original test assertions were not weakened. Fixtures now provide a real-schema version object and complete approval/manifests. B1 HTTP failure expectations changed from a generic failure to the stricter UNKNOWN_OUTCOME because a failed/invalid response cannot prove a write did not occur. The new canonical B1 marker replaces legacy writes; legacy markers still block retries.
 
+Follow-up PR CI `38114821363` attempt 1 failed the existing API room-boundary test with a domain-event count rising from 12 to 13. Its setup had issued 13 successful event-producing commands; queue acceptance does not await D1 consumer projection, and a fixed scheduler pump did not establish a complete baseline. The test now waits for exact cumulative domain and audit projections (3, 4, 8, 13) before side-effect snapshots. All task-state, event-count, audit-count, room-state and rejected-replay assertions remain unchanged. No production runtime code, test filter, retry or skip was added. The log does not identify which setup event arrived late; the explicit projection checks remove that ambiguity from the fixture. New exact-head CI conclusions are linked in the follow-up PR.
+
 ## PR #6 independent-review dispositions
 
 [Review 5481983056](https://github.com/takovn2/roomAgent/pull/6#pullrequestreview-5481983056) approved the earlier `f7e5142` source and supplied the findings below. This follow-up changes source, tests and manifests; the earlier approval is not transferred to the new head. Exact-head CI and renewed independent review remain separate gates.
