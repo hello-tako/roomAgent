@@ -1,10 +1,12 @@
 # Status
 
-## Stage C
+## Stage C and C1-A2
 
-State: `ROOMAGENT_STAGE_C_REVIEW_BLOCKED` on open pull request 5, branch `feat/stage-c-bootstrap-smoke-v1`.
+PR [#5](https://github.com/takovn2/roomAgent/pull/5) was merged on 2026-10-10 UTC. Its independently APPROVED head was `08e379e96c029ac929277622a0933a5db7c9810b`; resulting main `3909fada8747ae27ea71daf6da9481a7eb8d9eff` passed exact-main CI [38093203477](https://github.com/takovn2/roomAgent/actions/runs/38093203477). This approval covers Stage C source, not the subsequent C1-A2 operator hardening.
 
-Baseline `main` is `3528f923692b53c80559ba55a7101773e9a8bd1b`. The branch adds an operator-only staging bootstrap and a local governed smoke. It is not merged, not deployed, and not a remote D1 write. The public Worker `ai-company-os-api` is unchanged. Staging Worker version `3aeb3cbc-0f44-470c-af2c-30ab64d1bc55` does not contain this route yet. Certification stays `AI_COMPANY_OS_POC_PARTIAL`. `ROOMAGENT_STAGING_STAGE_C_RUNTIME_CERTIFIED` is not issued. The record is [stage-c/FINAL_STAGE_C_CERTIFICATION.md](reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md).
+C1-A2 source is on `fix/roomagent-c1-a2-security-hardening`, derived from verified handoff `6fac326a7fd3f504a51c23372485af252012e2c8` (one commit ahead of the unchanged baseline main). The original handoff CI [38105477230](https://github.com/takovn2/roomAgent/actions/runs/38105477230) failed formatting; later checks were skipped. Source/negative tests/CI integration are now implemented for a new independent review. Read the [hardening report](reports/stage-c/C1_A2_SECURITY_HARDENING_REPORT.md) and [Muse review package](reports/stage-c/C1_A2_INDEPENDENT_REVIEW_PACKAGE.md); exact implementation head and CI are recorded in the PR after publication.
+
+**GATE B and human mutation approval remain PENDING.** This task did not deploy, write remote D1, perform W1/W2/B1, create a staging owner/session, retire secrets or modify production. No new live Cloudflare observation/certification is claimed. `ROOMAGENT_STAGING_STAGE_C_RUNTIME_CERTIFIED`, `ROOMAGENT_STAGE_C1_SYNTHETIC_BOOTSTRAP_VERIFIED` and `AI_COMPANY_OS_POC_CERTIFIED` are not issued; POC remains PARTIAL. Historical runtime observations below are not fresh evidence for this implementation.
 
 ## Current runtime
 

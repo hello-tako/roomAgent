@@ -1,37 +1,39 @@
+> Hardening status correction (2026-10-11): this document retains the original Worker/plan approval-request baseline, **not approval of the changed operator source**. Independent review and human mutation approval remain PENDING. Current implementation SHA/manifests, binary pins, durable W1/W2/B1 gates and recovery requirements are defined in [the operator contract](20_A2_EXECUTION_PACKAGE.md) and the review reports. Historical hashes/results below must not certify changed source.
+
 # 18 — Final C1 approval manifest
 
 Revision 2. 2026-10-11 ~10:03 JST. Read-only. Nothing in this file has been executed.
 
 ## 1. Identity and plan
 
-| Item | Value |
-| --- | --- |
-| action | `ROOMAGENT_STAGE_C1_SYNTHETIC_BOOTSTRAP` |
-| approval_request_ref | `c1req-6c20d8157fe67e44067cd246` (PENDING, not an approval) |
-| identity_attestation_ref | `c1att-c193013432ad85744374a37889fb88ee` (VERIFIED, RS256/JWKS, iss/aud/type=app PASS, email_binding MATCHED) |
-| operatorIdentityRef | `c1op-bc5dc954153343965d3b4dad`. Bound: it is in the private plan next to the same attestationRef, issuer, subject, and email as the private attestation record. It is not the subject and contains no `@`. |
-| ownerDisplayName | `roomAgent Staging Owner` (confirmed by the owner) |
-| plan fields | 17 (exactly the keys the route parses) |
-| canonical_plan_digest | `971425db70d25b830d7fc75146298a07c43f4ff69547a999ffeb89e2e7b5f173`, recomputed 2026-10-11 ~10:05 JST from `operator/private/c1-canonical-plan.json`, matches |
-| repository / source_sha | `takovn2/roomAgent` (1410359112) / `3909fada8747ae27ea71daf6da9481a7eb8d9eff` |
-| account | `ef250a88911fd24073cb73d1c07e0218` |
-| worker | `ai-company-os-api-staging` (worker id `0e5cfb1a28814e60a4e2f7ce5210db6e`) |
-| base version / deployment | `cd03f994-9bc8-4aca-84c0-0f11ce9e0b8d` @100% / `7e523eba-cc34-4a67-9d5d-5eb47a6e4e32` |
-| D1 | `a6b8c2f6-d697-442b-8374-5006246324b2` (`ai-company-os-staging`) |
-| organization | `roomAgent Staging Smoke` |
+| Item                      | Value                                                                                                                                                                                                       |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| action                    | `ROOMAGENT_STAGE_C1_SYNTHETIC_BOOTSTRAP`                                                                                                                                                                    |
+| approval_request_ref      | `c1req-6c20d8157fe67e44067cd246` (PENDING, not an approval)                                                                                                                                                 |
+| identity_attestation_ref  | `c1att-c193013432ad85744374a37889fb88ee` (VERIFIED, RS256/JWKS, iss/aud/type=app PASS, email_binding MATCHED)                                                                                               |
+| operatorIdentityRef       | `c1op-bc5dc954153343965d3b4dad`. Bound: it is in the private plan next to the same attestationRef, issuer, subject, and email as the private attestation record. It is not the subject and contains no `@`. |
+| ownerDisplayName          | `roomAgent Staging Owner` (confirmed by the owner)                                                                                                                                                          |
+| plan fields               | 17 (exactly the keys the route parses)                                                                                                                                                                      |
+| canonical_plan_digest     | `971425db70d25b830d7fc75146298a07c43f4ff69547a999ffeb89e2e7b5f173`, recomputed 2026-10-11 ~10:05 JST from `operator/private/c1-canonical-plan.json`, matches                                                |
+| repository / source_sha   | `takovn2/roomAgent` (1410359112) / `3909fada8747ae27ea71daf6da9481a7eb8d9eff`                                                                                                                               |
+| account                   | `ef250a88911fd24073cb73d1c07e0218`                                                                                                                                                                          |
+| worker                    | `ai-company-os-api-staging` (worker id `0e5cfb1a28814e60a4e2f7ce5210db6e`)                                                                                                                                  |
+| base version / deployment | `cd03f994-9bc8-4aca-84c0-0f11ce9e0b8d` @100% / `7e523eba-cc34-4a67-9d5d-5eb47a6e4e32`                                                                                                                       |
+| D1                        | `a6b8c2f6-d697-442b-8374-5006246324b2` (`ai-company-os-staging`)                                                                                                                                            |
+| organization              | `roomAgent Staging Smoke`                                                                                                                                                                                   |
 
 Plan (subject/email are private, see 17): environment=staging, execution=remote-staging, accountId, databaseId, databaseName, schemaVersion=0015, repositorySha, orgName, ownerDisplayName, operatorIdentityRef, issuer=https://little-bar-8ffa.cloudflareaccess.com, subject, email, verificationSource=cloudflare-access-operator-record, attestationRef, approvalRef=c1req-6c20d8157fe67e44067cd246, expectedPreState=uninitialized.
 
 ## 2. D1 budget (one route call, one D1 batch)
 
-| Table | Rows |
-| --- | --- |
-| human_users | 1 |
-| organizations | 1 |
-| roles | 7 (owner, executive, manager, employee, qa, security, auditor) |
-| role_permissions | 66 (23+11+9+7+6+6+4) |
-| human_identities | 1 |
-| **total statements** | **76** |
+| Table                | Rows                                                           |
+| -------------------- | -------------------------------------------------------------- |
+| human_users          | 1                                                              |
+| organizations        | 1                                                              |
+| roles                | 7 (owner, executive, manager, employee, qa, security, auditor) |
+| role_permissions     | 66 (23+11+9+7+6+6+4)                                           |
+| human_identities     | 1                                                              |
+| **total statements** | **76**                                                         |
 
 No employees, rooms, tasks, artifacts, queue messages, workflow instances, human sessions, or audit/session rows are in this approval.
 
@@ -41,29 +43,30 @@ Connector identity: user `30e8d570016f943a2528b6cf79b6adbe`. One account visible
 
 Capability findings (from the connector schema, Cloudflare OpenAPI spec, and docs; no mutating call was made):
 
-| Need | Endpoint | Finding |
-| --- | --- | --- |
-| (a) new version with 3 secrets, not activated | `PATCH /accounts/{a}/workers/workers/{worker}/versions/latest?deploy=false` (JSON Merge Patch on latest) | CAPABLE. `deploy=true` would create a 100% deployment, so `deploy` must be omitted/false. Limitations: (1) it can only patch `latest`, so latest must equal active `cd03f994…` immediately before. (2) `bindings` is an array. Under RFC 7396 it is replaced as a whole, so the body must carry all 18 current bindings verbatim plus 3 `secret_text`. Never send a bindings list without them. (3) This endpoint has not been exercised on this account. |
-| — rejected | `PATCH /workers/scripts/{w}/secrets-bulk`, `PUT …/secrets` | NOT USED. Script-level secret endpoints = `wrangler secret` semantics (new version deployed immediately). |
-| (b) read back staged version | `GET /workers/workers/{w}/versions/{id}?include=modules`, `GET /workers/scripts/{w}/versions/{id}`, `GET …/versions` | CAPABLE (verified by read today). Secret bindings are returned as name+type only. Values are never returned. |
-| (c) activate exactly that version | `POST /workers/scripts/{w}/deployments` body `{strategy:"percentage",versions:[{version_id:<NEW>,percentage:100}]}`, no `force` | CAPABLE. **0% deployment: NOT POSSIBLE** (`percentage` minimum 0.01, sum must be 100). It is also not needed, because a version created with `deploy=false` already serves 0% traffic. |
-| (d) verify traffic | `GET /workers/scripts/{w}/deployments` | CAPABLE (verified by read today) |
-| (e) audit evidence without secret values | `GET /accounts/{a}/logs/audit` (v2) | CAPABLE. Read works today (HTTP 200) and shows actor/resource/action. Limitation: the connector takes JS code as a tool argument. A secret written inline would appear in the agent transcript. Mitigation (mandatory): generate the token in a mode-0600 file on the agent box, build the call code in a 0600 file, pass it as `$file:/path` (substituted only when sent to the connector server), return only names/ids/hashes, copy the token to Mac `operator/private/` (0600) for the POST, then delete the box copies. `BOOTSTRAP_APPROVAL_DIGEST` and `STAGING_RELEASE_SHA` are not secret in value but are handled the same way. |
-| bootstrap POST | `POST https://api-staging.tungjp.store/operator/staging-bootstrap` | NOT a connector call. It must run on the operator Mac, because it needs a fresh Access JWT (`cf-access-jwt-assertion`) plus headers `x-bootstrap-approval-token` and `x-bootstrap-approval-digest`, with values read from the pipe or 0600 files and never echoed. |
+| Need                                          | Endpoint                                                                                                                        | Finding                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| (a) new version with 3 secrets, not activated | `PATCH /accounts/{a}/workers/workers/{worker}/versions/latest?deploy=false` (JSON Merge Patch on latest)                        | CAPABLE. `deploy=true` would create a 100% deployment, so `deploy` must be omitted/false. Limitations: (1) it can only patch `latest`, so latest must equal active `cd03f994…` immediately before. (2) `bindings` is an array. Under RFC 7396 it is replaced as a whole, so the body must carry all 18 current bindings verbatim plus 3 `secret_text`. Never send a bindings list without them. (3) This endpoint has not been exercised on this account.                                                                                                                                                                                |
+| — rejected                                    | `PATCH /workers/scripts/{w}/secrets-bulk`, `PUT …/secrets`                                                                      | NOT USED. Script-level secret endpoints = `wrangler secret` semantics (new version deployed immediately).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| (b) read back staged version                  | `GET /workers/workers/{w}/versions/{id}?include=modules`, `GET /workers/scripts/{w}/versions/{id}`, `GET …/versions`            | CAPABLE (verified by read today). Secret bindings are returned as name+type only. Values are never returned.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| (c) activate exactly that version             | `POST /workers/scripts/{w}/deployments` body `{strategy:"percentage",versions:[{version_id:<NEW>,percentage:100}]}`, no `force` | CAPABLE. **0% deployment: NOT POSSIBLE** (`percentage` minimum 0.01, sum must be 100). It is also not needed, because a version created with `deploy=false` already serves 0% traffic.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| (d) verify traffic                            | `GET /workers/scripts/{w}/deployments`                                                                                          | CAPABLE (verified by read today)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| (e) audit evidence without secret values      | `GET /accounts/{a}/logs/audit` (v2)                                                                                             | CAPABLE. Read works today (HTTP 200) and shows actor/resource/action. Limitation: the connector takes JS code as a tool argument. A secret written inline would appear in the agent transcript. Mitigation (mandatory): generate the token in a mode-0600 file on the agent box, build the call code in a 0600 file, pass it as `$file:/path` (substituted only when sent to the connector server), return only names/ids/hashes, copy the token to Mac `operator/private/` (0600) for the POST, then delete the box copies. `BOOTSTRAP_APPROVAL_DIGEST` and `STAGING_RELEASE_SHA` are not secret in value but are handled the same way. |
+| bootstrap POST                                | `POST https://api-staging.tungjp.store/operator/staging-bootstrap`                                                              | NOT a connector call. It must run on the operator Mac, because it needs a fresh Access JWT (`cf-access-jwt-assertion`) plus headers `x-bootstrap-approval-token` and `x-bootstrap-approval-digest`, with values read from the pipe or 0600 files and never echoed.                                                                                                                                                                                                                                                                                                                                                                       |
 
 ## 4. Exact remote mutation sequence (count = 3 calls)
 
-| # | Call | Effect |
-| --- | --- | --- |
-| W1 | PATCH versions/latest (deploy=false): 18 existing bindings verbatim + `BOOTSTRAP_APPROVAL_TOKEN` (32 CSPRNG bytes, 64 hex, ≠ digest), `BOOTSTRAP_APPROVAL_DIGEST = 971425db…f173`, `STAGING_RELEASE_SHA = 3909fada…`; annotations `workers/message="C1 bootstrap approval secrets staged (c1req-6c20d8157fe67e44067cd246)"`, `workers/tag="c1-bootstrap-secrets"` | 1 new version, 0% traffic |
-| W2 | POST deployments `[{<NEW>,100}]` | 1 new deployment, NEW at 100% |
-| D1 | POST /operator/staging-bootstrap (from the Mac) | 76 D1 statements in one batch |
+| #   | Call                                                                                                                                                                                                                                                                                                                                                              | Effect                        |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| W1  | PATCH versions/latest (deploy=false): 18 existing bindings verbatim + `BOOTSTRAP_APPROVAL_TOKEN` (32 CSPRNG bytes, 64 hex, ≠ digest), `BOOTSTRAP_APPROVAL_DIGEST = 971425db…f173`, `STAGING_RELEASE_SHA = 3909fada…`; annotations `workers/message="C1 bootstrap approval secrets staged (c1req-6c20d8157fe67e44067cd246)"`, `workers/tag="c1-bootstrap-secrets"` | 1 new version, 0% traffic     |
+| W2  | POST deployments `[{<NEW>,100}]`                                                                                                                                                                                                                                                                                                                                  | 1 new deployment, NEW at 100% |
+| D1  | POST /operator/staging-bootstrap (from the Mac)                                                                                                                                                                                                                                                                                                                   | 76 D1 statements in one batch |
 
 Worker version/deployment mutations = **2** (1 version, 1 deployment). Optional 0% deployment = **0** (impossible and unneeded).
 
 ## 5. Code/bindings identity check (between W1 and W2; STOP if any fails)
 
 Reference = `cd03f994…`, read 2026-10-11:
+
 - one module `index.js` (`application/javascript+module`); SHA-256 of its base64 content = `5c2370f0a6a01ea5050412777c91dd9000d80c0cc2c5fc43259a652d9f4dc282`; script etag `83b84262f0eb57ce05268d72b8eca9658a3abcb64ecd2ee4f83e2c1b25abbad7`
 - main_module `index.js`, compatibility_date `2026-10-08`, usage_model standard, handlers fetch+queue, 5 DO classes + `ProductionTaskWorkflow`
 - 18 bindings: 7 plain_text (ACCESS_AUD, ACCESS_TEAM_DOMAIN, STAGING_ACCOUNT_ID, STAGING_DATABASE_ID, STAGING_DATABASE_NAME, STAGING_OPERATOR_BOOTSTRAP=enabled, STAGING_RUNTIME=cloudflare), D1 DB, R2 ARTIFACTS, 3 queues, workflow PRODUCTION_TASK, 5 DO namespaces (ids in 15)

@@ -1,25 +1,9 @@
-# Source inventory (t13u section 2) — workspace ~/Documents/ROOMAGENT_STAGE_C1_BOOTSTRAP_PREPARATION
-| Item | Status | Path |
-|---|---|---|
-| A2 runner | EXISTS | operator/c1-runner.mjs |
-| Access attestation script | EXISTS | operator/attest-access-identity.mjs (spawned by runner as child process, not imported) |
-| Related tests | EXISTS (single file) | operator/c1-runner.test.mjs (13 tests, node:test). No operator/tests/ directory -> MISSING as a directory; no tests for attest-access-identity.mjs -> MISSING |
-| Fixtures | EXISTS | operator/fixtures/bindings18.json |
-| Execution helpers | NONE SEPARATE (all helpers inline in c1-runner.mjs) |  |
-| W1 body template (runtime input) | EXISTS | 19_W1_REQUEST_BODY_PLACEHOLDER.json (read by runner at ../ relative to operator/) |
-| Owner approval template | EXISTS | operator/c1-owner-approval.TEMPLATE.txt (human_owner_approval=PENDING) |
-| operator/SHA256SUMS | EXISTS | 6 entries, all verified OK |
-| Dependency manifests (package.json / lockfile / .nvmrc) | MISSING | none anywhere in workspace |
-| A2 execution configuration | EXISTS (embedded) | REAL_CONFIG frozen object in c1-runner.mjs L22+; no separate config file |
-| 20_A2_EXECUTION_PACKAGE.md | EXISTS | 20_A2_EXECUTION_PACKAGE.md |
-| operator/private/ | EXISTS, EXCLUDED | c1-canonical-plan.json, c1-access-attestation.json, expected-email.sha256 |
+# Public C1-A2 bundle inventory
 
-## Imports
-c1-runner.mjs: node:crypto (createHash, randomBytes), node:fs, node:path, node:url, dynamic node:child_process (realDeps only).
-attest-access-identity.mjs: node:crypto, node:fs (multi-line import), node:fs/promises, node:path, node:url.
-c1-runner.test.mjs: node:test, node:assert/strict, node:fs, node:os, node:path, ./c1-runner.mjs, ./fixtures/bindings18.json.
-No third-party npm dependencies. Unlisted runtime dependencies (not in SHA256SUMS, outside bundle):
-- Node.js runtime (tested on v25.9.0; no engines pin)
-- `cloudflared` CLI (spawned: `access token -app=...`, `access login`) — external binary, unpinned
-- operator/private/* files (private, excluded by design)
-- ../19_W1_REQUEST_BODY_PLACEHOLDER.json (in SHA256SUMS and in bundle)
+All public operator `.mjs` source/tests, `fixtures/bindings18.json`, the PENDING owner template and W1 placeholder are controlled by `operator/SHA256SUMS`. Every public bundle file, including that inner manifest and HANDOFF metadata, is controlled by `BUNDLE_SHA256SUMS`. Both use bundle-root relative paths. Neither manifest hashes itself; outer hashes inner.
+
+Operator components: runner; pure/CLI Access attestation; exact bundle integrity; durable attempt markers; secure private I/O and pinned child processes; secret-safety scanner. Their colocated test suites are executed by `pnpm test:operator` without credentials or live Cloudflare.
+
+Private plan, original/fresh identity records, expected-email hash, owner approval, bootstrap token, attempt markers and receipts are intentionally excluded, ignored by Git/format/lint and prohibited from tracking. Execution validates modes/provenance/content separately. Public consistency does not authorize execution.
+
+Detailed inventory is mechanically verifiable from both manifests; review/evidence documents are under `docs/reports/stage-c/` and bound by the exact implementation Git commit.

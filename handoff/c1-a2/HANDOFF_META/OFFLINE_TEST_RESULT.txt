@@ -1,3 +1,6 @@
+HISTORICAL ORIGINAL HANDOFF SNAPSHOT ONLY — commit 6fac326a7fd3f504a51c23372485af252012e2c8
+Not validation of the changed hardening implementation. Current exact-source CI/test evidence is in the PR and review reports.
+
 # node v25.9.0, run 2026-10-11 10:55:01 JST on bundle copy
 ✔ dry-run validates offline and makes zero network calls (3.978875ms)
 ✔ execute refuses without approval file / with wrong digest / with wrong ref / without TTY (4.681292ms)

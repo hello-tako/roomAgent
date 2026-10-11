@@ -10,10 +10,25 @@ export default tseslint.config(
       "**/dist/**",
       "**/worker-configuration.d.ts",
       "**/vitest.config.ts",
+      "handoff/**/private/**",
+      "c1-operator/private/**",
     ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ["handoff/c1-a2/operator/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        Buffer: "readonly",
+        process: "readonly",
+        URL: "readonly",
+        TextDecoder: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+      },
+    },
+  },
   {
     files: ["**/*.ts"],
     languageOptions: {

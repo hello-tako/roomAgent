@@ -1,3 +1,5 @@
+> Hardening status correction (2026-10-11): this document retains the original Worker/plan approval-request baseline, **not approval of the changed operator source**. Independent review and human mutation approval remain PENDING. Current implementation SHA/manifests, binary pins, durable W1/W2/B1 gates and recovery requirements are defined in [the operator contract](20_A2_EXECUTION_PACKAGE.md) and the review reports. Historical hashes/results below must not certify changed source.
+
 # 19 — Mutation gate final check (CHECK A + CHECK B)
 
 2026-10-11 ~10:07–10:12 JST. Read-only. No W1, no W2, no POST, no secret write, no real token generated. Mutation approval is still PENDING.
@@ -12,13 +14,13 @@ CHECK_B (W1 endpoint, schema, live state, bindings diff) = PASS
 
 ### What was proven
 
-| Question | Evidence | Result |
-| --- | --- | --- |
-| Is `$file:` substituted tool-side, not by the model? | The platform's CallDynamicTool contract applies the substitution to external MCP namespaces when the call is sent. In a dummy test (`ok.js`, no API call) the model sent only the path, the snippet ran remotely, and the platform appended "…was replaced with the contents of … (111 bytes) before the call". | PROVEN (tool-side) |
-| Is file content echoed back in results? | A syntax-error dummy (`syn.js`) returned only `Error: Unexpected token '{'`, with no code echo. A runtime-error dummy was blocked by Auto-review before it ran: the reviewer could not see the opaque file content, so it was not tested. | PARTIAL. Not echoed on a parse error. Runtime error paths are untested, and a thrown message or stack could include code. |
-| Does the content reach the remote connector server? | YES, by design. `execute` is a code-execution tool. The substituted string is the JS code itself and is sent verbatim to the remote MCP server, which runs it in its sandbox and calls api.cloudflare.com. | A secret in the code = a secret in the remote server's request payload |
-| Does the remote MCP server, or the platform's MCP client, log tool arguments? | No documentation available to me states either way. The connector server's operator and retention policy were not verified. | NOT PROVABLE |
-| Can Auto-review audit a `$file` call? | No. It blocked the opaque dummy call. A W1 sent through `$file` would be unreviewable or blocked. | Negative |
+| Question                                                                      | Evidence                                                                                                                                                                                                                                                                                                        | Result                                                                                                                    |
+| ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Is `$file:` substituted tool-side, not by the model?                          | The platform's CallDynamicTool contract applies the substitution to external MCP namespaces when the call is sent. In a dummy test (`ok.js`, no API call) the model sent only the path, the snippet ran remotely, and the platform appended "…was replaced with the contents of … (111 bytes) before the call". | PROVEN (tool-side)                                                                                                        |
+| Is file content echoed back in results?                                       | A syntax-error dummy (`syn.js`) returned only `Error: Unexpected token '{'`, with no code echo. A runtime-error dummy was blocked by Auto-review before it ran: the reviewer could not see the opaque file content, so it was not tested.                                                                       | PARTIAL. Not echoed on a parse error. Runtime error paths are untested, and a thrown message or stack could include code. |
+| Does the content reach the remote connector server?                           | YES, by design. `execute` is a code-execution tool. The substituted string is the JS code itself and is sent verbatim to the remote MCP server, which runs it in its sandbox and calls api.cloudflare.com.                                                                                                      | A secret in the code = a secret in the remote server's request payload                                                    |
+| Does the remote MCP server, or the platform's MCP client, log tool arguments? | No documentation available to me states either way. The connector server's operator and retention policy were not verified.                                                                                                                                                                                     | NOT PROVABLE                                                                                                              |
+| Can Auto-review audit a `$file` call?                                         | No. It blocked the opaque dummy call. A W1 sent through `$file` would be unreviewable or blocked.                                                                                                                                                                                                               | Negative                                                                                                                  |
 
 Conclusion: putting `BOOTSTRAP_APPROVAL_TOKEN` into a tool argument, inline or through `$file:`, cannot be shown to stay out of remote or connector logs. **BLOCKED.**
 
@@ -27,16 +29,20 @@ Scope note: only `BOOTSTRAP_APPROVAL_TOKEN` is secret. `BOOTSTRAP_APPROVAL_DIGES
 ### Safer alternatives (proposed, not executed; each needs the owner's choice and the C1 approval)
 
 **A1 — Token generated inside the connector sandbox, returned only as a sealed envelope (recommended if the connector is kept)**
+
 1. On the Mac: generate an RSA-3072 key pair for RSA-OAEP-SHA256. The private key goes in `operator/private/` (0600) and never leaves the Mac. The public key is not secret.
 2. W1 code (inline and readable, so Auto-review can inspect it; no `$file`): `crypto.getRandomValues(32 bytes)` → 64 hex; assert ≠ digest; PATCH as in CHECK B with that value; return only `{new_version_id, token_sha256, token_rsa_oaep_b64}`. Wrap the code in try/catch so an error returns no variables.
 3. On the Mac: decrypt into `operator/private/bootstrap-approval-token` (0600) and check that the SHA-256 matches `token_sha256`.
+
 - The token is never in an argument, a result, a transcript, or a model context (only ciphertext and a hash are).
 - Residual risk: the plaintext exists in the remote sandbox's memory for the duration of the call (not in its logged arguments). The connector server operator was not verified.
 
 **A2 — Direct Cloudflare API call from the Mac, with no connector or agent in the secret path (strongest isolation)**
+
 1. The owner creates a short-lived API token in the dashboard: account `ef250a88…` only, `Workers Scripts Edit`, TTL of a few hours. The owner enters it through a hidden prompt (`read -s`) into one Mac process's environment. It is not pasted into chat or files.
 2. That process: `openssl rand -hex 32` > 0600 file → builds the W1 body from `19_W1_REQUEST_BODY_PLACEHOLDER.json` locally → one `curl -X PATCH …/versions/latest` (no `deploy` param) → prints only the new version id and HTTP status. The same process can later send the bootstrap POST.
 3. The owner revokes the API token after C1.
+
 - Residual risk: this needs a new owner-issued Edit token, which the original task forbids without owner consent, so it is an explicit owner decision.
 
 **A3 — Owner enters the token through a hidden prompt on the Mac**, and the Mac sends it directly to api.cloudflare.com. This is the same as A2 for transport; it only changes where the token is generated.
@@ -55,18 +61,19 @@ Scope note: only `BOOTSTRAP_APPROVAL_TOKEN` is secret. `BOOTSTRAP_APPROVAL_DIGES
 
 ### Fresh live state (read 2026-10-11 10:07:01 JST)
 
-| Check | Value | Result |
-| --- | --- | --- |
-| worker | `ai-company-os-api-staging` / `0e5cfb1a28814e60a4e2f7ce5210db6e` | PASS |
-| active deployment | `7e523eba-cc34-4a67-9d5d-5eb47a6e4e32`, `cd03f994…` @100%, unchanged (2 deployments total) | PASS |
-| latest version | `cd03f994-9bc8-4aca-84c0-0f11ce9e0b8d` (#2) = active | PASS |
-| versions | only `cd03f994…`, `3aeb3cbc…` (no undeployed newer version) | PASS |
-| secrets | `[]` | PASS |
-| bindings | 18; identical across the new-API latest, the new-API by-id, and the legacy version read | PASS |
+| Check             | Value                                                                                      | Result |
+| ----------------- | ------------------------------------------------------------------------------------------ | ------ |
+| worker            | `ai-company-os-api-staging` / `0e5cfb1a28814e60a4e2f7ce5210db6e`                           | PASS   |
+| active deployment | `7e523eba-cc34-4a67-9d5d-5eb47a6e4e32`, `cd03f994…` @100%, unchanged (2 deployments total) | PASS   |
+| latest version    | `cd03f994-9bc8-4aca-84c0-0f11ce9e0b8d` (#2) = active                                       | PASS   |
+| versions          | only `cd03f994…`, `3aeb3cbc…` (no undeployed newer version)                                | PASS   |
+| secrets           | `[]`                                                                                       | PASS   |
+| bindings          | 18; identical across the new-API latest, the new-API by-id, and the legacy version read    | PASS   |
 
 ### W1 body vs. fresh bindings
 
 `19_W1_REQUEST_BODY_PLACEHOLDER.json` (placeholders only, no real value):
+
 - 21 bindings: entries 1–18 are a deep copy of the fresh read. Each one is equal byte-for-byte in canonical sorted JSON and in as-read key order, 18/18.
 - Canonical SHA-256 of the fresh 18 is `1feacf2a5bcb6be55972c1727e75a5257c2ee28830a76955786aaf15fb3dfcff`. The first 18 entries of the body have the same hash.
 - Added, exactly 3, all `secret_text`: `BOOTSTRAP_APPROVAL_TOKEN` (<64-hex CSPRNG, ≠ digest>), `BOOTSTRAP_APPROVAL_DIGEST` (<971425db…f173>), `STAGING_RELEASE_SHA` (<3909fada…>).

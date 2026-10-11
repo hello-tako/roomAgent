@@ -1,6 +1,6 @@
 repository              = takovn2/roomAgent
 repository_id           = 1410359112
-certified_source_sha    = 3909fada8747ae27ea71daf6da9481a7eb8d9eff
+worker_source_sha       = 3909fada8747ae27ea71daf6da9481a7eb8d9eff
 account                 = ef250a88911fd24073cb73d1c07e0218
 worker                  = ai-company-os-api-staging (id 0e5cfb1a28814e60a4e2f7ce5210db6e)
 baseline_worker_version = cd03f994-9bc8-4aca-84c0-0f11ce9e0b8d
@@ -10,6 +10,12 @@ identity_attestation_ref= c1att-c193013432ad85744374a37889fb88ee
 approval_request_ref    = c1req-6c20d8157fe67e44067cd246
 canonical_plan_digest   = 971425db70d25b830d7fc75146298a07c43f4ff69547a999ffeb89e2e7b5f173
 d1_budget               = 76 statements
-NOTE: the runner/attestation code is NOT part of the roomAgent git repo; it is a local
-operator package with no commit. Its identity is the SHA-256 set in operator/SHA256SUMS.
-These are review baselines, not mutation authorizations.
+baseline_main_sha       = 3909fada8747ae27ea71daf6da9481a7eb8d9eff
+original_handoff_sha    = 6fac326a7fd3f504a51c23372485af252012e2c8
+implementation_branch  = fix/roomagent-c1-a2-security-hardening
+NOTE: operator source is now tracked in this repository. The exact implementation SHA
+is the commit containing this file, pinned independently in the PR/owner approval.
+Worker source SHA is not operator implementation SHA. Both current manifests are
+recomputed for changed bytes; no historic source checksum/review authorizes this version.
+All identifiers here are fail-closed review pins, not mutation or runtime certification.
+Independent review = PENDING. Human mutation approval = PENDING.
