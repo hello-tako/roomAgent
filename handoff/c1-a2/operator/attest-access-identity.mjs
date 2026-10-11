@@ -31,6 +31,7 @@ export const ACCESS_AUDIENCE = "24f00c2910e19f99e8a833de7b6c7dc14d18683699985a6d
 export const ACCESS_CERTS_URL = `${ACCESS_ISSUER}/cdn-cgi/access/certs`;
 
 const CLOCK_SKEW_SECONDS = 60;
+const MAX_ATTESTATION_AGE_SECONDS = 900;
 const MAX_TOKEN_BYTES = 8192;
 const MAX_CERTS_BYTES = 64 * 1024;
 const MAX_JWKS_KEYS = 16;
@@ -264,13 +265,13 @@ function validateParsed(parsed, { jwks, nowSeconds, expectedEmailSha256, expecte
     reject("TOKEN_NOT_YET_VALID");
   }
   if (
-    payload.iat !== undefined &&
-    (typeof payload.iat !== "number" ||
-      !Number.isFinite(payload.iat) ||
-      payload.iat < 0 ||
-      payload.iat > MAX_DATE_SECONDS ||
-      payload.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
-      payload.iat >= payload.exp)
+    typeof payload.iat !== "number" ||
+    !Number.isSafeInteger(payload.iat) ||
+    payload.iat < 0 ||
+    payload.iat > MAX_DATE_SECONDS ||
+    payload.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
+    nowSeconds - payload.iat > MAX_ATTESTATION_AGE_SECONDS ||
+    payload.iat >= payload.exp
   ) {
     reject("TOKEN_ISSUED_AT_INVALID");
   }

@@ -4,5 +4,6 @@ dist
 pnpm-lock.yaml
 worker-configuration.d.ts
 .hoplite/
+.context/pr-review-loop/
 handoff/**/private/
 c1-operator/private/

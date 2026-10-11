@@ -25,6 +25,7 @@ import {
   Stop,
   run,
   makeCf,
+  d1State,
   canonicalPlan,
   sha256hex,
   bindingsHash,
@@ -505,6 +506,39 @@ test("bootstrap POST failure or network error = stop, never retried; secrets scr
     const token = readFileSync(join(env.priv, "c1-bootstrap-approval-token"), "utf8").trim();
     const text = d.redactor.scrub(allOutput(outLines, err));
     assert.ok(!text.includes(token) && !text.includes(JWT) && !text.includes(API_TOKEN));
+  }
+});
+
+test("D1 prestate binds the organization name without interpolating SQL", async () => {
+  for (const orgName of [REAL_CONFIG.orgName, "Smoke'; DROP TABLE organizations; --"]) {
+    const cfg = { ...testConfig(), orgName };
+    const world = mockWorld(cfg);
+    const cf = makeCf({
+      cfg,
+      deps: { fetch: world.fetch },
+      state: { mutationsEnabled: false, allowNext: null, apiToken: API_TOKEN },
+    });
+    assert.deepEqual(await d1State(cf, cfg, cfg.prestate, "PRE"), cfg.prestate);
+    const count = world.calls
+      .filter((call) => call.path.endsWith("/query"))
+      .map((call) => JSON.parse(call.body))
+      .find((body) => body.sql.includes("AS org_named"));
+    assert.ok(count.sql.includes("WHERE name = ?"));
+    assert.ok(!count.sql.includes(orgName));
+    assert.deepEqual(count.params, [orgName]);
+    assertReadOnlySql(count.sql);
+    assert.deepEqual(mutating(world.calls), []);
+  }
+});
+
+test("D1 rejects unsupported parameter values before making a request", async () => {
+  const cf = makeCf({
+    cfg: testConfig(),
+    deps: { fetch: async () => assert.fail("must not be called") },
+    state: { mutationsEnabled: false, allowNext: null, apiToken: API_TOKEN },
+  });
+  for (const params of [null, "name", {}, [null], [42], [{}], new Array(1)]) {
+    await assert.rejects(cf.d1("SELECT ?", params), { code: "D1_PARAMS_INVALID" });
   }
 });
 

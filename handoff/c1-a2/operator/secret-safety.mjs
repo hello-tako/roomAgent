@@ -89,18 +89,40 @@ const PRIVATE_IDENTITY_JSON_KEYS = new Set([
   "private_identity_record",
 ]);
 
+function canonicalizeTrackedPath(path) {
+  const normalized = path.replaceAll("\\", "/");
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized) || normalized.includes("\0")) {
+    return null;
+  }
+
+  const parts = [];
+  for (const part of normalized.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (parts.length === 0) return null;
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.length > 0 ? parts.join("/") : null;
+}
+
 function normalizeTrackedPath(path) {
-  return path
-    .replaceAll("\\", "/")
-    .replace(/^(?:\.\/)+/, "")
-    .replace(/\/{2,}/g, "/");
+  return (
+    canonicalizeTrackedPath(path) ??
+    path
+      .replaceAll("\\", "/")
+      .replace(/\/{2,}/g, "/")
+      .replace(/^(?:\.\/)+/, "")
+  );
 }
 
 function isPrivateDirectoryPath(path) {
-  const parts = normalizeTrackedPath(path)
-    .split("/")
-    .filter(Boolean)
-    .map((part) => part.toLowerCase());
+  const canonicalPath = canonicalizeTrackedPath(path);
+  if (canonicalPath === null) return false;
+
+  const parts = canonicalPath.toLowerCase().split("/");
   const directories = parts.slice(0, -1);
 
   if (parts[0] === "handoff") {
@@ -111,7 +133,10 @@ function isPrivateDirectoryPath(path) {
 }
 
 function isPrivateArtifactPath(path) {
-  const normalized = normalizeTrackedPath(path).toLowerCase();
+  const canonicalPath = canonicalizeTrackedPath(path);
+  if (canonicalPath === null) return false;
+
+  const normalized = canonicalPath.toLowerCase();
   if (normalized === OWNER_APPROVAL_TEMPLATE_PATH) return false;
 
   const fileName = basename(normalized);
@@ -298,7 +323,13 @@ export function scanTrackedFiles(trackedFiles) {
 
   for (const entry of trackedFiles) {
     if (!entry || typeof entry.path !== "string") continue;
-    const path = normalizeTrackedPath(entry.path);
+    const canonicalPath = canonicalizeTrackedPath(entry.path);
+    const path = canonicalPath ?? normalizeTrackedPath(entry.path);
+
+    if (canonicalPath === null) {
+      addFinding("TRACKED_FILE_UNREADABLE", path);
+      continue;
+    }
 
     if (isPrivateDirectoryPath(path)) {
       addFinding("TRACKED_PRIVATE_PATH", path);
@@ -367,13 +398,20 @@ function readListedEntries(repoRoot, listedPaths) {
     start = end + 1;
     end = listedPaths.indexOf(0, start);
     if (pathBytes.length === 0) continue;
-    const path = pathBytes.toString("utf8");
+    const rawPath = pathBytes.toString("utf8");
+    const canonicalPath = canonicalizeTrackedPath(rawPath);
+    const path = canonicalPath ?? normalizeTrackedPath(rawPath);
+    if (canonicalPath === null) {
+      entries.push({ path, content: null });
+      continue;
+    }
+
     if (isPrivateDirectoryPath(path) || isPrivateArtifactPath(path)) {
       entries.push({ path, content: "" });
       continue;
     }
 
-    const absolutePath = resolve(repoRoot, ...path.split("/"));
+    const absolutePath = resolve(repoRoot, ...rawPath.split("/"));
     const fromRoot = relative(repoRoot, absolutePath);
     if (isAbsolute(fromRoot) || fromRoot === ".." || fromRoot.startsWith(`..${sep}`)) {
       entries.push({ path, content: null });

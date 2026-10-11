@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import {
+import fs, {
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -12,6 +13,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -120,6 +122,36 @@ function expectCode(operation, code) {
     operation,
     (error) => error?.code === code && error.message === code && error.cause === undefined,
   );
+}
+
+function replaceBeforeOpen(targetPath, replacePath, operation) {
+  const originalOpenSync = fs.openSync;
+  let replaced = false;
+  let descriptor;
+  let flags;
+
+  fs.openSync = (path, ...args) => {
+    if (!replaced && path === targetPath) {
+      replaced = true;
+      replacePath();
+    }
+
+    const openedDescriptor = originalOpenSync(path, ...args);
+    if (path === targetPath) {
+      descriptor = openedDescriptor;
+      flags = args[0];
+    }
+    return openedDescriptor;
+  };
+  syncBuiltinESMExports();
+
+  try {
+    operation();
+    return { replaced, descriptor, flags };
+  } finally {
+    fs.openSync = originalOpenSync;
+    syncBuiltinESMExports();
+  }
 }
 
 function replaceTrustedManifestDigest(bundle, digest) {
@@ -313,6 +345,70 @@ test("rejects symlinked public files and ancestor directories", (t) => {
   renameSync(operatorPath, movedOperatorPath);
   symlinkSync(movedOperatorPath, operatorPath, "dir");
   expectCode(() => verify(ancestorBundle), "BUNDLE_PATH_SYMLINK");
+});
+
+test("rejects a symlink swapped in after lstat, even when it targets approved bytes", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  const approvedCopy = join(bundle.bundleDir, "..", "approved-runner.mjs");
+  const temporaryLink = join(bundle.bundleDir, "..", "runner-link");
+  writeFileSync(approvedCopy, readFileSync(runner));
+
+  const { replaced, descriptor } = replaceBeforeOpen(
+    runner,
+    () => {
+      symlinkSync(approvedCopy, temporaryLink);
+      renameSync(temporaryLink, runner);
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_PATH_SYMLINK"),
+  );
+
+  assert.equal(replaced, true);
+  assert.equal(descriptor, undefined);
+  assert.equal(lstatSync(runner).isSymbolicLink(), true);
+});
+
+test("rejects a regular-file replacement and closes its descriptor", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  const replacement = join(bundle.bundleDir, "..", "replacement-runner.mjs");
+  writeFileSync(replacement, readFileSync(runner));
+
+  const { replaced, descriptor } = replaceBeforeOpen(
+    runner,
+    () => renameSync(replacement, runner),
+    () => expectCode(() => verify(bundle), "BUNDLE_PATH_CHANGED"),
+  );
+
+  assert.equal(replaced, true);
+  assert.ok(Number.isInteger(descriptor));
+  assert.throws(
+    () => fstatSync(descriptor),
+    (error) => error?.code === "EBADF",
+  );
+});
+
+test("rejects a directory swapped in after lstat and closes its nonblocking descriptor", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+
+  const { replaced, descriptor, flags } = replaceBeforeOpen(
+    runner,
+    () => {
+      unlinkSync(runner);
+      mkdirSync(runner);
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_FILE_NOT_REGULAR"),
+  );
+
+  assert.equal(replaced, true);
+  assert.ok(Number.isInteger(descriptor));
+  assert.ok(Number.isInteger(flags));
+  assert.notEqual(flags & fs.constants.O_NONBLOCK, 0);
+  assert.throws(
+    () => fstatSync(descriptor),
+    (error) => error?.code === "EBADF",
+  );
 });
 
 test("rejects symlinked bundle path ancestors", (t) => {

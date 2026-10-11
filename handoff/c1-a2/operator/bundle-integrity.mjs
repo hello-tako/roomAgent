@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+} from "node:fs";
 import { join, parse, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 
@@ -134,12 +142,47 @@ function pathStat(root, relativePath, missingCode) {
 function readRegularFile(root, relativePath, missingCode = "BUNDLE_FILE_MISSING") {
   const { path, stat } = pathStat(root, relativePath, missingCode);
   if (!stat.isFile()) fail("BUNDLE_FILE_NOT_REGULAR");
-
-  try {
-    return readFileSync(path);
-  } catch {
+  if (typeof constants.O_NOFOLLOW !== "number" || typeof constants.O_NONBLOCK !== "number") {
     fail("BUNDLE_READ_FAILED");
   }
+
+  let descriptor;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (error) {
+    if (error?.code === "ELOOP") fail("BUNDLE_PATH_SYMLINK");
+    fail("BUNDLE_READ_FAILED");
+  }
+
+  let bytes;
+  let closeFailed = false;
+  try {
+    let openedStat;
+    try {
+      openedStat = fstatSync(descriptor);
+    } catch {
+      fail("BUNDLE_READ_FAILED");
+    }
+
+    if (!openedStat.isFile()) fail("BUNDLE_FILE_NOT_REGULAR");
+    // O_NOFOLLOW covers the final component; match the opened inode to the lstat result.
+    if (openedStat.dev !== stat.dev || openedStat.ino !== stat.ino) fail("BUNDLE_PATH_CHANGED");
+
+    try {
+      bytes = readFileSync(descriptor);
+    } catch {
+      fail("BUNDLE_READ_FAILED");
+    }
+  } finally {
+    try {
+      closeSync(descriptor);
+    } catch {
+      closeFailed = true;
+    }
+  }
+
+  if (closeFailed) fail("BUNDLE_READ_FAILED");
+  return bytes;
 }
 
 function validatePrivateTree(path) {
