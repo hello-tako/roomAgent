@@ -4,7 +4,9 @@ Status: implementation handoff only. **Review of the updated source and human mu
 
 ## Exact evidence coordinates
 
-Repository `takovn2/roomAgent`, ID `1410359112`; branch `fix/roomagent-c1-a2-security-hardening`. Baseline main/Worker source `3909fada8747ae27ea71daf6da9481a7eb8d9eff`; original handoff `6fac326a7fd3f504a51c23372485af252012e2c8`. The implementation SHA, PR URL, exact-head CI run/job IDs and conclusion are in the PR/final handoff after commit. This avoids self-referential commit/manifests. Review the commit, not a mutable branch label.
+Repository `takovn2/roomAgent`, ID `1410359112`; branch `fix/roomagent-c1-a2-security-hardening--review-follow-up`. Baseline main/Worker source `3909fada8747ae27ea71daf6da9481a7eb8d9eff`; original handoff `6fac326a7fd3f504a51c23372485af252012e2c8`. The implementation SHA, PR URL, exact-head CI run/job IDs and conclusion are in the PR/final handoff after commit. This avoids self-referential commit/manifests. Review the commit, not a mutable branch label.
+
+PR #6 was owner-merged before these fixes were delivered. They are published separately on this follow-up branch from current main, not included in the historical PR #6 approval or merge. Hoplite performed no merge.
 
 - Inner operator manifest SHA-256: `7ff9c4be0199fce8c6e2aac0af07d7c34e99306182fe4d1bdd983f40e4220197`.
 - Outer bundle manifest SHA-256: `a0d8e31d1ccaea5ebbdb796e5080c209a3e578235b3b680e284e91052afcd79a`.

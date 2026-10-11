@@ -9,7 +9,7 @@ Task: `ROOMAGENT_STAGE_C1_A2_HARDENING`. Implementation engineer: Hoplite. Indep
 | Repository / ID                               | `takovn2/roomAgent` / `1410359112`                                                                                                                      |
 | Baseline main / immutable Worker source       | `3909fada8747ae27ea71daf6da9481a7eb8d9eff`                                                                                                              |
 | Original handoff                              | `6fac326a7fd3f504a51c23372485af252012e2c8`, ahead main by one commit                                                                                    |
-| Implementation branch                         | `fix/roomagent-c1-a2-security-hardening`                                                                                                                |
+| Implementation branch                         | `fix/roomagent-c1-a2-security-hardening--review-follow-up`                                                                                              |
 | Stage C prior review                          | PR #5 APPROVED at `08e379e96c029ac929277622a0933a5db7c9810b`, then merged                                                                               |
 | Baseline exact-main CI                        | [38093203477](https://github.com/takovn2/roomAgent/actions/runs/38093203477), SUCCESS                                                                   |
 | Original handoff CI                           | [38105477230](https://github.com/takovn2/roomAgent/actions/runs/38105477230), job 114369973586, FAILURE at format (12 files); subsequent checks skipped |
@@ -65,6 +65,8 @@ The original test assertions were not weakened. Fixtures now provide a real-sche
 ## PR #6 independent-review dispositions
 
 [Review 5481983056](https://github.com/takovn2/roomAgent/pull/6#pullrequestreview-5481983056) approved the earlier `f7e5142` source and supplied the findings below. This follow-up changes source, tests and manifests; the earlier approval is not transferred to the new head. Exact-head CI and renewed independent review remain separate gates.
+
+PR #6 was merged by the repository owner at `2026-10-11T05:13:58Z` while this response was being implemented. Hoplite did not merge it. The preserved original-branch checkpoint `5abfc15` was then cherry-picked onto a fresh follow-up branch from the merged main; the approved source and merged-main trees were identical. This follow-up needs its own review and exact-head CI.
 
 | Review finding                            | Implementation or disposition                                                                                                                                                              | Regression / review evidence                                                                                                                                           |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
