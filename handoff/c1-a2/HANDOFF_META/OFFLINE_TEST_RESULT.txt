@@ -1,0 +1,22 @@
+# node v25.9.0, run 2026-10-11 10:55:01 JST on bundle copy
+✔ dry-run validates offline and makes zero network calls (3.978875ms)
+✔ execute refuses without approval file / with wrong digest / with wrong ref / without TTY (4.681292ms)
+✔ happy path: exactly W1, W2, one POST; W1 has no deploy param; W2 is [{NEW,100}] without force; no secret in output (7.5855ms)
+✔ pre-W1 drift stops before any mutation (latest, bindings, secrets) (4.154125ms)
+✔ post-W1 code mismatch stops before W2 (1.797916ms)
+✔ W1 network error = UNKNOWN_OUTCOME, exactly one PATCH, rerun refused (1.895958ms)
+✔ W2 not confirmed = stop, no deployment (1.652584ms)
+✔ bootstrap POST failure or network error = stop, never retried; secrets scrubbed from error (4.95125ms)
+✔ D1 read that reports a write stops (1.317166ms)
+✔ guards: public worker, public D1, foreign account, non-allowlisted mutation, write SQL (0.360292ms)
+✔ real config: template bindings hash and W1 body shape match the live read (0.272334ms)
+✔ redactor scrubs registered secrets, JWT shapes and bearer headers (0.058375ms)
+✔ plan/approval validators reject tampering (0.193125ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 146.768167
