@@ -202,7 +202,7 @@ test("audience membership accepts the pinned audience and rejects malformed audi
   }
 });
 
-test("rejects malformed token segments, base64url, JSON, and JWT headers", (t) => {
+test("rejects malformed token segments, base64url, JSON, and JWT headers", async (t) => {
   const payloadPart = b64url(validPayload());
   const cases = [
     ["wrong part count", "one.two"],
@@ -233,32 +233,32 @@ test("rejects malformed token segments, base64url, JSON, and JWT headers", (t) =
     ["invalid key id", signedToken({ header: { kid: "bad.kid" } })],
   ];
   for (const [name, token] of cases) {
-    t.test(name, () =>
+    await t.test(name, () =>
       assertCode(
         () => validate(token),
         name === "unsupported algorithm" ? "ALG_REJECTED" : "TOKEN_MALFORMED",
       ),
     );
   }
-  t.test("unsupported algorithm", () =>
+  await t.test("unsupported algorithm", () =>
     assertCode(() => validate(signedToken({ header: { alg: "HS256" } })), "ALG_REJECTED"),
   );
 });
 
-test("pins issuer and rejects service or missing token types", (t) => {
+test("pins issuer and rejects service or missing token types", async (t) => {
   const cases = [
     ["wrong issuer", { iss: `${ACCESS_ISSUER}/` }, "ISSUER_MISMATCH"],
     ["service token", { type: "org" }, "TOKEN_TYPE_REJECTED"],
     ["missing token type", { type: undefined }, "TOKEN_TYPE_REJECTED"],
   ];
   for (const [name, claims, code] of cases) {
-    t.test(name, () =>
+    await t.test(name, () =>
       assertCode(() => validate(signedToken({ payload: validPayload(claims) })), code),
     );
   }
 });
 
-test("enforces expiration, not-before, issued-at, and the bounded clock skew", (t) => {
+test("enforces expiration, not-before, issued-at, and the bounded clock skew", async (t) => {
   const cases = [
     ["expired at the current second", { exp: NOW_SECONDS }, "TOKEN_EXPIRED"],
     ["non-numeric expiration", { exp: String(NOW_SECONDS + 60) }, "TOKEN_EXPIRY_INVALID"],
@@ -270,11 +270,11 @@ test("enforces expiration, not-before, issued-at, and the bounded clock skew", (
     ["issued-at at expiration", { iat: NOW_SECONDS + 600 }, "TOKEN_ISSUED_AT_INVALID"],
   ];
   for (const [name, claims, code] of cases) {
-    t.test(name, () =>
+    await t.test(name, () =>
       assertCode(() => validate(signedToken({ payload: validPayload(claims) })), code),
     );
   }
-  t.test("accepts not-before and issued-at exactly within skew", () => {
+  await t.test("accepts not-before and issued-at exactly within skew", () => {
     const identity = validate(
       signedToken({ payload: validPayload({ nbf: NOW_SECONDS + 60, iat: NOW_SECONDS + 60 }) }),
     );
@@ -282,7 +282,7 @@ test("enforces expiration, not-before, issued-at, and the bounded clock skew", (
   });
 });
 
-test("requires a human email and exact subject/hash binding", (t) => {
+test("requires a human email and exact subject/hash binding", async (t) => {
   const missingEmail = validPayload();
   delete missingEmail.email;
   const missingSubject = validPayload();
@@ -295,21 +295,21 @@ test("requires a human email and exact subject/hash binding", (t) => {
     ["long subject", validPayload({ sub: "s".repeat(129) }), "SUBJECT_INVALID"],
   ];
   for (const [name, claims, code] of cases) {
-    t.test(name, () => assertCode(() => validate(signedToken({ payload: claims })), code));
+    await t.test(name, () => assertCode(() => validate(signedToken({ payload: claims })), code));
   }
-  t.test("compares subject without normalization", () =>
+  await t.test("compares subject without normalization", () =>
     assertCode(
       () => validate(signedToken(), { expectedSubject: SUBJECT.toUpperCase() }),
       "SUBJECT_MISMATCH",
     ),
   );
-  t.test("compares email hashes after normalization", () =>
+  await t.test("compares email hashes after normalization", () =>
     assertCode(
       () => validate(signedToken(), { expectedEmailSha256: "0".repeat(64) }),
       "EMAIL_MISMATCH",
     ),
   );
-  t.test("rejects an invalid expected email digest", () =>
+  await t.test("rejects an invalid expected email digest", () =>
     assertCode(
       () => validate(signedToken(), { expectedEmailSha256: "not-a-digest" }),
       "EXPECTED_EMAIL_HASH_INVALID",
@@ -317,11 +317,11 @@ test("requires a human email and exact subject/hash binding", (t) => {
   );
 });
 
-test("rejects unknown and mismatched signing keys or invalid signatures", (t) => {
-  t.test("unknown kid", () =>
+test("rejects unknown and mismatched signing keys or invalid signatures", async (t) => {
+  await t.test("unknown kid", () =>
     assertCode(() => validate(signedToken({ header: { kid: "unknown-key" } })), "KID_UNKNOWN"),
   );
-  t.test("same kid with another RSA public key", () =>
+  await t.test("same kid with another RSA public key", () =>
     assertCode(
       () =>
         validate(signedToken({ signer: OTHER_PAIR.privateKey }), {
@@ -330,7 +330,7 @@ test("rejects unknown and mismatched signing keys or invalid signatures", (t) =>
       "SIGNATURE_INVALID",
     ),
   );
-  t.test("tampered signature", () => {
+  await t.test("tampered signature", () => {
     const token = signedToken();
     const [header, payload] = token.split(".");
     assertCode(
@@ -340,7 +340,7 @@ test("rejects unknown and mismatched signing keys or invalid signatures", (t) =>
   });
 });
 
-test("fails closed on untrusted or malformed JWKS entries", (t) => {
+test("fails closed on untrusted or malformed JWKS entries", async (t) => {
   const leadingZeroModulus = Buffer.concat([
     Buffer.from([0]),
     Buffer.from(PRIMARY_JWK.n, "base64url"),
@@ -371,7 +371,9 @@ test("fails closed on untrusted or malformed JWKS entries", (t) => {
     ],
   ];
   for (const [name, jwks] of invalidSets) {
-    t.test(name, () => assertCode(() => validate(signedToken(), { jwks }), "CERTS_INVALID_SCHEMA"));
+    await t.test(name, () =>
+      assertCode(() => validate(signedToken(), { jwks }), "CERTS_INVALID_SCHEMA"),
+    );
   }
 });
 

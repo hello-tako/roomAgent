@@ -25,6 +25,23 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Inspect hosted Node executable pin inputs
+        run: |
+          pnpm exec node --input-type=module -e '
+            import { lstatSync, realpathSync } from "node:fs";
+            import { dirname } from "node:path";
+            const path = realpathSync(process.execPath);
+            const stat = lstatSync(path);
+            console.log(JSON.stringify({ execPath: process.execPath, path, version: process.version,
+              processUid: process.getuid(), ownerUid: stat.uid, mode: (stat.mode & 0o777).toString(8),
+              isFile: stat.isFile(), isSymlink: stat.isSymbolicLink() }));
+            for (let current = dirname(path); ; current = dirname(current)) {
+              const parent = lstatSync(current);
+              console.log(JSON.stringify({ directory: current, isDirectory: parent.isDirectory(),
+                isSymlink: parent.isSymbolicLink() }));
+              if (dirname(current) === current) break;
+            }
+          '
       - run: pnpm test:operator
       - run: node handoff/c1-a2/operator/secret-safety.mjs
       - run: node handoff/c1-a2/operator/c1-runner.mjs --verify-bundle

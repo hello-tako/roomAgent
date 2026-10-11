@@ -14,8 +14,8 @@ Task: `ROOMAGENT_STAGE_C1_A2_HARDENING`. Implementation engineer: Hoplite. Indep
 | Baseline exact-main CI                        | [38093203477](https://github.com/takovn2/roomAgent/actions/runs/38093203477), SUCCESS                                                                   |
 | Original handoff CI                           | [38105477230](https://github.com/takovn2/roomAgent/actions/runs/38105477230), job 114369973586, FAILURE at format (12 files); subsequent checks skipped |
 | Exact implementation SHA / new CI run and job | Commit containing this report; pinned in PR/final delivery after commit, not self-embedded                                                              |
-| Operator manifest SHA-256                     | `37f40c3368746191fdd5dca70be7d4d4194919637d9afb4a0fd0ead63af28366`                                                                                      |
-| Bundle manifest SHA-256                       | `0afec38ce3919fc642b6de46d32fe2ab9efc2631969ea5832e218b91d69c149a`                                                                                      |
+| Operator manifest SHA-256                     | `7eca37cca11f12cb8d20e0a00b773bb13e4c54b5f3031e23b8e646572a31343a`                                                                                      |
+| Bundle manifest SHA-256                       | `a6dbba6cd9a873118517b534917edc4904300c50810f403889571ff7f910c8b4`                                                                                      |
 
 Main/handoff ancestry was fetched and rechecked before implementation/publication. No reset, source-branch overwrite, force-push, dependency upgrade, migration or production Wrangler change was made. The Worker release `sourceSha` remains separate from the new operator implementation SHA.
 
@@ -57,6 +57,8 @@ WRANGLER_SEND_METRICS=false pnpm --filter @ai-company/api exec wrangler deploy -
 ```
 
 Expected measured totals from the full implementation suites: domain 14, policy 15, schemas 2, API 130; operator 262 (runner 126, attestation 88, markers 17, integrity 14, secure I/O 8, secret safety 9); Python migrations 11, D1 preflight 19, staging bootstrap 6. Final PASS requires exit 0 for every command, both manifests consistent and zero skipped/disabled tests; the final PR carries the exact SHA/run/job conclusion.
+
+Initial implementation CI runs `38110988724` and `38110991601` failed the operator suite; they are not PASS evidence. Node 22 cancelled 47 nested attestation tests because six parent tests did not await their children. Every child is now awaited, preserving all 88 attestation assertions; local Node `22.23.3` runs all 262 operator tests with zero failures, cancellations or skips. A separate hosted-Node executable pin failure must also be resolved before exact-head CI can pass.
 
 The original test assertions were not weakened. Fixtures now provide a real-schema version object and complete approval/manifests. B1 HTTP failure expectations changed from a generic failure to the stricter UNKNOWN_OUTCOME because a failed/invalid response cannot prove a write did not occur. The new canonical B1 marker replaces legacy writes; legacy markers still block retries.
 

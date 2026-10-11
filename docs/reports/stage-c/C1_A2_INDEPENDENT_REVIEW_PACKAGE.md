@@ -6,8 +6,8 @@ Status: implementation handoff only. **Muse review/GATE B and human mutation app
 
 Repository `takovn2/roomAgent`, ID `1410359112`; branch `fix/roomagent-c1-a2-security-hardening`. Baseline main/Worker source `3909fada8747ae27ea71daf6da9481a7eb8d9eff`; original handoff `6fac326a7fd3f504a51c23372485af252012e2c8`. The implementation SHA, PR URL, exact-head CI run/job IDs and conclusion are in the PR/final handoff after commit. This avoids self-referential commit/manifests. Review the commit, not a mutable branch label.
 
-- Inner operator manifest SHA-256: `37f40c3368746191fdd5dca70be7d4d4194919637d9afb4a0fd0ead63af28366`.
-- Outer bundle manifest SHA-256: `0afec38ce3919fc642b6de46d32fe2ab9efc2631969ea5832e218b91d69c149a`.
+- Inner operator manifest SHA-256: `7eca37cca11f12cb8d20e0a00b773bb13e4c54b5f3031e23b8e646572a31343a`.
+- Outer bundle manifest SHA-256: `a6dbba6cd9a873118517b534917edc4904300c50810f403889571ff7f910c8b4`.
 - Detailed findings, source functions, test counts and limitations: [hardening report](C1_A2_SECURITY_HARDENING_REPORT.md).
 - Original main CI 38093203477 was SUCCESS; original handoff CI 38105477230 was FAILURE with later steps SKIPPED. Neither approves this new operator source.
 
