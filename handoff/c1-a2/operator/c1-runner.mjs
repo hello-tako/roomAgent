@@ -12,10 +12,12 @@
 //
 // Remote mutations, in order, at most once each: W1 PATCH versions/latest (no deploy),
 // W2 POST deployments [{NEW,100}] (no force), B1 POST /operator/staging-bootstrap.
-// Before the bootstrap token is persisted, one pre-W1 Access check uses the pinned
-// cloudflared binary and the existing attestation child. It does not replace the
-// post-W2 attestation or the sample immediately before B1, and it does not refresh
-// or retry a rejected token.
+// Before the bootstrap token is persisted, pre-W1 Access checks use the pinned
+// cloudflared binary and the existing attestation child. Effective remaining
+// lifetime is min(iat + 900 - now, exp - now) and must be at least 120 seconds.
+// The clock is sampled again after the read-only preflight and before W1.
+// This does not replace the post-W2 attestation or the sample immediately before
+// B1, and it does not refresh or retry a rejected token.
 // Unknown outcome on any of them = STOP, no retry. No human session. No retirement.
 
 import { createHash, randomBytes } from "node:crypto";
@@ -24,8 +26,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyBundleIntegrity, verifyManifestConsistency } from "./bundle-integrity.mjs";
 import {
-  MAX_ATTESTATION_AGE_SECONDS,
-  accessJwtAgeSeconds,
+  accessJwtEffectiveRemainingSeconds,
   assertAccessJwtTimeBounds,
 } from "./attest-access-identity.mjs";
 import {
@@ -44,8 +45,8 @@ import {
   writePrivateExclusive,
 } from "./runtime-io.mjs";
 
-// Remaining freshness required before the irreversible W1/W2 ceremony.
-// This does not change the inclusive 900.000-second B1 limit and is not a CLI option.
+// Minimum effective remaining lifetime before W1. It applies to both the 900-second
+// issuance window and the JWT exp, and it does not change the inclusive B1 age limit.
 export const MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS = 120;
 
 export const REAL_CONFIG = Object.freeze({
@@ -824,46 +825,50 @@ async function runInner(argv, deps, cfg, receiptBox) {
     }
   };
   // Additional gate only. A pass here is not a promise that the post-W2 token stays fresh.
-  {
-    await deps.validateTools(approval);
-    let preW1Jwt;
+  let preW1Jwt;
+  const assertPreW1Budget = () => {
+    let remaining;
     try {
-      preW1Jwt = await deps.getAccessJwt(cfg.appUrl);
+      remaining = accessJwtEffectiveRemainingSeconds(preW1Jwt, { now: deps.now });
     } catch {
       throw new Stop("PRE_W1_ACCESS_FAILED");
     }
-    preW1Jwt = red.add(preW1Jwt);
-    if (
-      typeof preW1Jwt !== "string" ||
-      preW1Jwt.length > 32 * 1024 ||
-      !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(preW1Jwt)
-    )
+    if (!(remaining >= MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS))
       throw new Stop("PRE_W1_ACCESS_FAILED");
-    await verifyBoundAccessJwt(preW1Jwt, "PRE_W1_ACCESS_FAILED");
-    try {
-      const ageSeconds = accessJwtAgeSeconds(preW1Jwt, { now: deps.now });
-      if (ageSeconds > MAX_ATTESTATION_AGE_SECONDS - MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS)
-        throw new Stop("PRE_W1_ACCESS_FAILED");
-    } catch (error) {
-      if (error instanceof Stop) throw error;
-      throw new Stop("PRE_W1_ACCESS_FAILED");
-    }
-    step("pre_w1_access", "PASS pinned identity and remaining freshness budget");
+  };
+  await deps.validateTools(approval);
+  try {
+    preW1Jwt = await deps.getAccessJwt(cfg.appUrl);
+  } catch {
+    throw new Stop("PRE_W1_ACCESS_FAILED");
   }
+  preW1Jwt = red.add(preW1Jwt);
+  if (
+    typeof preW1Jwt !== "string" ||
+    preW1Jwt.length > 32 * 1024 ||
+    !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(preW1Jwt)
+  )
+    throw new Stop("PRE_W1_ACCESS_FAILED");
+  await verifyBoundAccessJwt(preW1Jwt, "PRE_W1_ACCESS_FAILED");
+  assertPreW1Budget();
+  step("pre_w1_access", "PASS pinned identity and effective remaining lifetime");
 
   await d1State(cf, cfg, cfg.prestate, "PRE_W1_D1");
   step("pre_w1_d1", "PASS uninitialized");
   const bindings18 = await preW1(cf, cfg);
   step("pre_w1_worker", "PASS pinned base, live bindings, no secrets and code parity");
+  const freshBindings = await preW1(cf, cfg);
+  if (bindingsHash(freshBindings) !== bindingsHash(bindings18)) throw new Stop("DRIFT_BINDINGS");
+  await d1State(cf, cfg, cfg.prestate, "PRE_W1_FINAL_D1");
+  await verifyReviewed();
+  // Sample the clock again. The earlier pass must not be reused after those awaits.
+  assertPreW1Budget();
+  step("pre_w1_access_final", "PASS effective remaining lifetime immediately before W1");
   const token = red.add(randomBytes(32).toString("hex"));
   if (token === cfg.digest) throw new Stop("APPROVAL_TOKEN_DERIVED");
   deps.writeExclusive(join(priv, "c1-bootstrap-approval-token"), `${token}\n`);
   receipt.approval_token_sha256 = sha256hex(token);
-  const freshBindings = await preW1(cf, cfg);
-  if (bindingsHash(freshBindings) !== bindingsHash(bindings18)) throw new Stop("DRIFT_BINDINGS");
-  await d1State(cf, cfg, cfg.prestate, "PRE_W1_FINAL_D1");
   const body = buildW1Body(freshBindings, { token }, cfg);
-  await verifyReviewed();
   mark("W1", { baseVersion: cfg.baseVersion });
   const w1 = await mutate("PATCH", `${W(cfg)}/versions/latest`, body);
   const newId = w1.id;

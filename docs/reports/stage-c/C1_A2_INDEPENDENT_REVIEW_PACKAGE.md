@@ -8,15 +8,15 @@ Repository `hello-tako/roomAgent`, ID `1410359112` (transferred from `takovn2/ro
 
 PR #6 was owner-merged before these fixes were delivered. They are published separately on this follow-up branch from current main, not included in the historical PR #6 approval or merge. Hoplite performed no merge.
 
-- Inner operator manifest SHA-256: `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d`.
-- Outer bundle manifest SHA-256: `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`.
-- Reviewed head before this remediation: `9fbea5a00d7b8b01243d6de628cb77453e5dedff`, with operator `3f93809a62fc8424caaccbe13ed6e393468b30e762f610bc28884be605755978` and bundle `06aa52d6e96ad14fd82e875127c6b26f2a61286bae5e51c65c27b48eb28ef736`.
+- Inner operator manifest SHA-256: `6609c3e77b3788578ec97016a01f12e9b794290822a402d017b4b88032670fe5`.
+- Outer bundle manifest SHA-256: `1037cb2f72c2b45c539035a18e24696d80464332c7ad82d1dcc10da5c3df7a7e`.
+- Reviewed head `b0180c0a3676ee5ede173c00d0e027726d516e01` used operator `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d` and bundle `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`.
 - Detailed findings, source functions, test counts and limitations: [hardening report](C1_A2_SECURITY_HARDENING_REPORT.md).
 - Original main CI 38093203477 was SUCCESS; original handoff CI 38105477230 was FAILURE with later steps SKIPPED. Neither approves this new operator source.
 
 ## Follow-up review focus
 
-Challenge the pre-W1 Access gate: it must reject an already stale, expired, malformed, mis-bound, or budget-exhausted JWT before W1, keep the unfloored 900.000-second B1 limit, and keep the synchronous freshness sample immediately before B1. Also challenge descriptor no-follow/bigint snapshot/ancestor rechecks, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The 120-second remaining-freshness budget is hardcoded and is not a bypass. F3 same-UID marker replay remains unresolved. The next independent source review is ChatGPT. Muse formal review is not requested until that re-review is complete. The checkpoint SQL interpolation and secret-scanner reduction are intentionally absent. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
+Challenge the pre-W1 effective remaining lifetime `min(iat + 900 - now, exp - now)`, including the second sample after the asynchronous preflight and before the bootstrap token. A JWT with under 120.000 seconds until `exp` must stop before W1. Keep the unfloored 900.000-second B1 limit and the synchronous freshness sample immediately before B1. Also challenge descriptor no-follow/bigint snapshot/ancestor rechecks, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The 120-second threshold is hardcoded and is not a bypass. F3 same-UID marker replay remains unresolved. The next independent source review is ChatGPT. Muse formal review is not requested until that re-review is complete. The checkpoint SQL interpolation and secret-scanner reduction are intentionally absent. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
 
 Also inspect `apps/api/test/room-task-boundary.test.ts`: the CI fixture waits for exact legitimate setup event projections before taking no-side-effect snapshots. The original denied-command/replay assertions are retained; runtime task-room guards are unchanged.
 

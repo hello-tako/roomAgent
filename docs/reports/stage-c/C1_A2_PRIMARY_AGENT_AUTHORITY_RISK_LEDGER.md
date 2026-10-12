@@ -53,27 +53,29 @@ Preserved from PR #9 and not replaced by the checkpoint:
 
 ## Risk ledger
 
-| ID                                  | State                            | Note                                                                                                                                                                                       |
-| ----------------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| F1 JWT millisecond boundary         | SOURCE_REMEDIATED_PENDING_REVIEW | 900000ms is inside the inclusive B1 window. 900001ms and 900999ms are stale. Flooring the clock is removed.                                                                                |
-| F1 delay before B1                  | SOURCE_REMEDIATED_PENDING_REVIEW | Human confirmation, D1 reads, and review checks cannot skip the final pre-dispatch sample.                                                                                                 |
-| PR #9 late JWT preflight            | SOURCE_REMEDIATED_PENDING_REVIEW | A stale, expired, malformed, mis-bound, or budget-exhausted Access JWT stops before W1. The 120-second remaining budget does not raise the 900.000-second B1 limit. Post-W2 checks remain. |
-| F2 descriptor race                  | SOURCE_REMEDIATED_PENDING_REVIEW | Leaf no-follow and ancestor snapshots are tested. This does not pin every ancestor descriptor and does not defeat same-UID or root swap-and-restore.                                       |
-| F3 same-UID marker replay           | UNRESOLVED_MEDIUM                | A same-UID owner or root can delete local attempt markers. No marker redesign and no forced retry were added.                                                                              |
-| Checkpoint SQL interpolation        | REJECTED                         | Not merged.                                                                                                                                                                                |
-| Checkpoint secret-scanner reduction | REJECTED                         | Not merged.                                                                                                                                                                                |
-| Governance                          | OPEN                             | `main` is unprotected. `vn-taphoanhatung` cannot currently be a required approver.                                                                                                         |
-| Staging versus source               | NOT_RECERTIFIED                  | Historical staging Worker pin `3909fada8747ae27ea71daf6da9481a7eb8d9eff` is not current `main`. Issue #8 receipts are historical and do not authorize W1, W2, or B1.                       |
-| Production Worker                   | UNTOUCHED                        | No production deploy, secret, D1 write, Access change, or bootstrap.                                                                                                                       |
-| D1 compatibility                    | UNCHANGED_CONTRACT               | Organization-name counts stay bound parameters. The read-only SQL guard is unchanged. A client error without a D1 response remains an uncertain outcome and must not be retried.           |
-| Live product workflow               | NOT_STARTED                      | Stage 5 is outside this delivery.                                                                                                                                                          |
+| ID                                  | State                            | Note                                                                                                                                                                             |
+| ----------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1 JWT millisecond boundary         | SOURCE_REMEDIATED_PENDING_REVIEW | 900000ms is inside the inclusive B1 window. 900001ms and 900999ms are stale. Flooring the clock is removed.                                                                      |
+| F1 delay before B1                  | SOURCE_REMEDIATED_PENDING_REVIEW | Human confirmation, D1 reads, and review checks cannot skip the final pre-dispatch sample.                                                                                       |
+| PR #9 late JWT preflight            | SOURCE_REMEDIATED_PENDING_REVIEW | A stale, expired, malformed, mis-bound, or budget-exhausted Access JWT stops before W1. Post-W2 checks remain.                                                                   |
+| RA-C1-04 expiration budget          | SOURCE_REMEDIATED_PENDING_REVIEW | Effective remaining lifetime is min(iat + 900 - now, exp - now) and must be at least 120.000 seconds. The inclusive 900.000-second B1 rule is unchanged.                         |
+| RA-C1-05 preflight clock drift      | SOURCE_REMEDIATED_PENDING_REVIEW | The same attested JWT is measured again after the async Worker/D1/source checks and before the bootstrap token and W1 marker.                                                    |
+| F2 descriptor race                  | SOURCE_REMEDIATED_PENDING_REVIEW | Leaf no-follow and ancestor snapshots are tested. This does not pin every ancestor descriptor and does not defeat same-UID or root swap-and-restore.                             |
+| F3 same-UID marker replay           | UNRESOLVED_MEDIUM                | A same-UID owner or root can delete local attempt markers. No marker redesign and no forced retry were added.                                                                    |
+| Checkpoint SQL interpolation        | REJECTED                         | Not merged.                                                                                                                                                                      |
+| Checkpoint secret-scanner reduction | REJECTED                         | Not merged.                                                                                                                                                                      |
+| Governance                          | OPEN                             | `main` is unprotected. `vn-taphoanhatung` cannot currently be a required approver.                                                                                               |
+| Staging versus source               | NOT_RECERTIFIED                  | Historical staging Worker pin `3909fada8747ae27ea71daf6da9481a7eb8d9eff` is not current `main`. Issue #8 receipts are historical and do not authorize W1, W2, or B1.             |
+| Production Worker                   | UNTOUCHED                        | No production deploy, secret, D1 write, Access change, or bootstrap.                                                                                                             |
+| D1 compatibility                    | UNCHANGED_CONTRACT               | Organization-name counts stay bound parameters. The read-only SQL guard is unchanged. A client error without a D1 response remains an uncertain outcome and must not be retried. |
+| Live product workflow               | NOT_STARTED                      | Stage 5 is outside this delivery.                                                                                                                                                |
 
-## Manifests after the pre-W1 remediation
+## Manifests after review round 2
 
-Reviewed head `9fbea5a00d7b8b01243d6de628cb77453e5dedff` used operator `3f93809a62fc8424caaccbe13ed6e393468b30e762f610bc28884be605755978` and bundle `06aa52d6e96ad14fd82e875127c6b26f2a61286bae5e51c65c27b48eb28ef736`.
+Head `b0180c0a3676ee5ede173c00d0e027726d516e01` used operator `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d` and bundle `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`.
 
-- Operator manifest SHA-256: `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d`
-- Bundle manifest SHA-256: `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`
+- Operator manifest SHA-256: `6609c3e77b3788578ec97016a01f12e9b794290822a402d017b4b88032670fe5`
+- Bundle manifest SHA-256: `1037cb2f72c2b45c539035a18e24696d80464332c7ad82d1dcc10da5c3df7a7e`
 
 `c1-runner.mjs --verify-bundle` returns `BUNDLE_CONSISTENT_NOT_APPROVED` for these hashes. Consistency is not owner approval.
 

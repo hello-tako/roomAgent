@@ -14,8 +14,8 @@ Task: `ROOMAGENT_STAGE_C1_A2_HARDENING`. Implementation engineer: Hoplite. Indep
 | Baseline exact-main CI                        | [38093203477](https://github.com/takovn2/roomAgent/actions/runs/38093203477), SUCCESS                                                                   |
 | Original handoff CI                           | [38105477230](https://github.com/takovn2/roomAgent/actions/runs/38105477230), job 114369973586, FAILURE at format (12 files); subsequent checks skipped |
 | Exact implementation SHA / new CI run and job | Commit containing this report; pinned in PR/final delivery after commit, not self-embedded                                                              |
-| Operator manifest SHA-256                     | `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d`                                                                                      |
-| Bundle manifest SHA-256                       | `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`                                                                                      |
+| Operator manifest SHA-256                     | `6609c3e77b3788578ec97016a01f12e9b794290822a402d017b4b88032670fe5`                                                                                      |
+| Bundle manifest SHA-256                       | `1037cb2f72c2b45c539035a18e24696d80464332c7ad82d1dcc10da5c3df7a7e`                                                                                      |
 
 Main/handoff ancestry was fetched and rechecked before implementation/publication. No reset, source-branch overwrite, force-push, dependency upgrade, migration or production Wrangler change was made. The Worker release `sourceSha` remains separate from the new operator implementation SHA.
 
@@ -107,6 +107,16 @@ The post-W2 attestation, the post-confirmation attestation, the synchronous samp
 Negative pre-W1 cases assert zero W1 PATCH, zero W2 deployment POST, zero B1 POST, no W1/W2/B1 marker, no bootstrap token file, and no JWT or identity leak. Covered cases are stale-but-unexpired, missing `iat`, fractional `iat`, invalid signature, wrong issuer, wrong audience, wrong subject, wrong normalized email, expired JWT, fractional `exp` at its boundary, insufficient remaining budget, cloudflared command failure, and attestation child failure. A valid fresh JWT still reaches W1 and W2 and is attested again after W2. F2 descriptor behavior is unchanged. F3 remains `UNRESOLVED_MEDIUM`.
 
 Previous manifests on the reviewed head were operator `3f93809a62fc8424caaccbe13ed6e393468b30e762f610bc28884be605755978` and bundle `06aa52d6e96ad14fd82e875127c6b26f2a61286bae5e51c65c27b48eb28ef736`. The current manifests are in the authority table above. `c1-runner.mjs --verify-bundle` returns `BUNDLE_CONSISTENT_NOT_APPROVED`. Consistency is not owner approval. The next gate is a new ChatGPT source review of this exact head. Muse formal review is not requested by this patch. No Cloudflare resource was mutated.
+
+## PR #9 ChatGPT review round 2
+
+Reviewed head `b0180c0a3676ee5ede173c00d0e027726d516e01` had decision `ROOMAGENT_C1_A2_PR9_CHATGPT_REVIEW2_CHANGES_REQUIRED`. Two readiness gaps remained. RA-C1-04: the pre-W1 budget used only the 900-second issuance age, so a JWT whose `exp` was sooner could pass. RA-C1-05: that sample happened before the asynchronous Worker and D1 reads, so the token could fall below the threshold during those reads and W1 could still start.
+
+`accessJwtEffectiveRemainingSeconds` is now the only readiness helper. It does not verify the signature. The runner calls it only after attestation of that same JWT. The formula is `min(iat + 900 - now, exp - now)` on the unfloored clock, and the inclusive threshold remains 120.000 seconds. `MAX_ATTESTATION_AGE_SECONDS` remains 900. The helper is called once after the initial attestation and again after the final Worker, D1, and source checks. The second call reads the clock at that moment. The bootstrap token is persisted only after that second sample. A predictable preflight failure therefore leaves no token file. A failure after the file exists still keeps the file for owner reconciliation and does not overwrite it.
+
+The test that previously accepted a fractional `exp` one millisecond before lapse now expects `PRE_W1_ACCESS_FAILED` and zero mutations. Expiration boundaries at 1ms, 119999ms, 120000ms, and 120001ms, fractional 120.000/119.999 boundaries, and each budget being the smaller one are covered. Two slow-preflight tests advance the injected clock on the first read-only response and require rejection with one attestation, one JWT fetch, reads already performed, and no W1/W2/B1 mutation or marker. The inclusive B1 900000ms acceptance and 900001ms rejection remain. F2 is unchanged. F3 remains `UNRESOLVED_MEDIUM`.
+
+Manifests on `b0180c0` were operator `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d` and bundle `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`. Current manifests are in the authority table. The next gate is ChatGPT review of the new exact head. Muse formal review is not requested. No Cloudflare resource was mutated.
 
 ## Independent handoff
 

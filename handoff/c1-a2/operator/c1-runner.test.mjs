@@ -1957,13 +1957,17 @@ test("pre-W1 accepts exactly 120.000s of remaining freshness", async () => {
   assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
 });
 
-test("pre-W1 rejects one millisecond under the remaining freshness budget", async () => {
+test("pre-W1 rejects when freshness budget is under 120s and expiration budget is ample", async () => {
   const cfg = testConfig();
   const env = setup(cfg);
   const w = mockWorld(cfg);
   const ageMilliseconds =
     (MAX_ATTESTATION_AGE_SECONDS - MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS) * 1000 + 1;
-  const accessToken = signedAccessJwt({ iat: NOW_SECONDS, nbf: NOW_SECONDS });
+  const accessToken = signedAccessJwt({
+    iat: NOW_SECONDS,
+    nbf: NOW_SECONDS,
+    exp: NOW_SECONDS + 3600,
+  });
   const { d, outLines } = deps(cfg, env, w, {
     accessToken,
     now: () => NOW_SECONDS * 1000 + ageMilliseconds,
@@ -1977,6 +1981,113 @@ test("pre-W1 rejects one millisecond under the remaining freshness budget", asyn
   assert.equal(counters.jwt, 1);
   assertNoCeremony(env, w);
   assertTransportSafe(outLines, error, [accessToken]);
+});
+
+test("pre-W1 rejects when expiration budget is under 120s and freshness budget is ample", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const accessToken = signedAccessJwt({
+    iat: NOW_SECONDS - 60,
+    nbf: NOW_SECONDS - 60,
+    exp: NOW_SECONDS + 60,
+  });
+  const { d, outLines } = deps(cfg, env, w, { accessToken, now: () => NOW_SECONDS * 1000 });
+  const counters = instrumentSecrets(d);
+  let error;
+  await assert.rejects(run(["--execute"], d, cfg), (e) => {
+    error = e;
+    return e.code === "PRE_W1_ACCESS_FAILED";
+  });
+  assert.equal(counters.jwt, 1);
+  assertNoCeremony(env, w);
+  assertTransportSafe(outLines, error, [accessToken]);
+});
+
+for (const [label, expOffsetMilliseconds, accepted] of [
+  ["1ms of expiration remaining", 1, false],
+  ["119999ms of expiration remaining", 119999, false],
+  ["120000ms of expiration remaining", 120000, true],
+  ["120001ms of expiration remaining", 120001, true],
+])
+  test(`pre-W1 ${accepted ? "accepts" : "rejects"} a fresh JWT with ${label}`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    const accessToken = signedAccessJwt({
+      iat: NOW_SECONDS,
+      nbf: NOW_SECONDS,
+      exp: NOW_SECONDS + expOffsetMilliseconds / 1000,
+    });
+    const { d, outLines } = deps(cfg, env, w, {
+      accessToken,
+      now: () => NOW_SECONDS * 1000,
+    });
+    if (accepted) {
+      assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
+      assert.equal(w.calls.filter((c) => c.method === "PATCH").length, 1);
+      assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
+      return;
+    }
+    const counters = instrumentSecrets(d);
+    let error;
+    await assert.rejects(run(["--execute"], d, cfg), (e) => {
+      error = e;
+      return e.code === "PRE_W1_ACCESS_FAILED";
+    });
+    assert.equal(counters.jwt, 1);
+    assertNoCeremony(env, w);
+    assertTransportSafe(outLines, error, [accessToken]);
+  });
+
+for (const [label, elapsedMilliseconds, accepted] of [
+  ["fractional exp exactly 120.000s remaining", 500, true],
+  ["fractional exp 119.999s remaining", 501, false],
+])
+  test(`pre-W1 ${accepted ? "accepts" : "rejects"} ${label}`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    const accessToken = signedAccessJwt({
+      iat: NOW_SECONDS,
+      nbf: NOW_SECONDS,
+      exp: NOW_SECONDS + 120.5,
+    });
+    const { d, outLines } = deps(cfg, env, w, {
+      accessToken,
+      now: () => NOW_SECONDS * 1000 + elapsedMilliseconds,
+    });
+    if (accepted) {
+      assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
+      assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
+      return;
+    }
+    let error;
+    await assert.rejects(run(["--execute"], d, cfg), (e) => {
+      error = e;
+      return e.code === "PRE_W1_ACCESS_FAILED";
+    });
+    assertNoCeremony(env, w);
+    assertTransportSafe(outLines, error, [accessToken]);
+  });
+
+test("pre-W1 accepts when freshness and expiration budgets are both exactly 120.000s", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const ageMilliseconds =
+    (MAX_ATTESTATION_AGE_SECONDS - MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS) * 1000;
+  const { d } = deps(cfg, env, w, {
+    accessToken: signedAccessJwt({
+      iat: NOW_SECONDS,
+      nbf: NOW_SECONDS,
+      exp: NOW_SECONDS + MAX_ATTESTATION_AGE_SECONDS,
+    }),
+    now: () => NOW_SECONDS * 1000 + ageMilliseconds,
+  });
+  assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
+  assert.equal(w.calls.filter((c) => c.method === "PATCH").length, 1);
+  assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
 });
 
 for (const elapsedMilliseconds of [900000, 900001, 900999])
@@ -2020,17 +2131,68 @@ test("pre-W1 rejects a fractional exp at its exact boundary", async () => {
   assertTransportSafe(outLines, error, [accessToken]);
 });
 
-test("pre-W1 accepts a fractional exp one millisecond before it lapses", async () => {
+test("pre-W1 rejects a fractional exp one millisecond before it lapses", async () => {
   const cfg = testConfig();
   const env = setup(cfg);
   const w = mockWorld(cfg);
-  const { d } = deps(cfg, env, w, {
-    accessToken: signedAccessJwt({ iat: NOW_SECONDS, exp: NOW_SECONDS + 0.5 }),
+  const accessToken = signedAccessJwt({ iat: NOW_SECONDS, exp: NOW_SECONDS + 0.5 });
+  const { d, outLines } = deps(cfg, env, w, {
+    accessToken,
     now: () => NOW_SECONDS * 1000 + 499,
   });
-  assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
-  assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
+  let error;
+  await assert.rejects(run(["--execute"], d, cfg), (e) => {
+    error = e;
+    return e.code === "PRE_W1_ACCESS_FAILED";
+  });
+  assertNoCeremony(env, w);
+  assertTransportSafe(outLines, error, [accessToken]);
 });
+
+for (const [label, delayMilliseconds] of [
+  ["freshness budget", 780001],
+  ["expiration budget", 60001],
+])
+  test(`pre-W1 rejects when read-only preflight crosses the ${label}`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    const accessToken = signedAccessJwt({
+      iat: NOW_SECONDS,
+      nbf: NOW_SECONDS,
+      exp: NOW_SECONDS + (label === "expiration budget" ? 180 : 3600),
+    });
+    let nowMilliseconds = NOW_SECONDS * 1000;
+    const { d, outLines } = deps(cfg, env, w, {
+      accessToken,
+      now: () => nowMilliseconds,
+    });
+    const counters = instrumentSecrets(d);
+    const attest = d.attest;
+    let attestations = 0;
+    d.attest = async (...args) => {
+      attestations++;
+      return attest(...args);
+    };
+    const fetch = d.fetch;
+    let reads = 0;
+    d.fetch = async (url, init = {}) => {
+      const result = await fetch(url, init);
+      reads++;
+      if (reads === 1) nowMilliseconds += delayMilliseconds;
+      return result;
+    };
+    let error;
+    await assert.rejects(run(["--execute"], d, cfg), (e) => {
+      error = e;
+      return e.code === "PRE_W1_ACCESS_FAILED";
+    });
+    assert.equal(attestations, 1);
+    assert.equal(counters.jwt, 1);
+    assert.ok(reads > 0);
+    assertNoCeremony(env, w);
+    assertTransportSafe(outLines, error, [accessToken]);
+  });
 
 for (const fault of [
   "symlink-replacement",
