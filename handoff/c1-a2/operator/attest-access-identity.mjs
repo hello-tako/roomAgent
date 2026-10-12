@@ -365,6 +365,14 @@ export function assertAccessJwtTimeBounds(token, { now = Date.now } = {}) {
   validateTimeClaims(parseToken(token).payload, clockSeconds(now));
 }
 
+// Unfloored age in seconds after the same time-claim checks. Does not return identity claims.
+export function accessJwtAgeSeconds(token, { now = Date.now } = {}) {
+  const payload = parseToken(token).payload;
+  const nowSeconds = clockSeconds(now);
+  validateTimeClaims(payload, nowSeconds);
+  return nowSeconds - payload.iat;
+}
+
 // Network wrapper used by the CLI; the only request is a GET to the pinned issuer certs URL.
 export async function verifyAccessJwt(token, options = {}) {
   const parsed = parseToken(token);

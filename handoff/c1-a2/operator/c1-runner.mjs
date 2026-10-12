@@ -12,6 +12,10 @@
 //
 // Remote mutations, in order, at most once each: W1 PATCH versions/latest (no deploy),
 // W2 POST deployments [{NEW,100}] (no force), B1 POST /operator/staging-bootstrap.
+// Before the bootstrap token is persisted, one pre-W1 Access check uses the pinned
+// cloudflared binary and the existing attestation child. It does not replace the
+// post-W2 attestation or the sample immediately before B1, and it does not refresh
+// or retry a rejected token.
 // Unknown outcome on any of them = STOP, no retry. No human session. No retirement.
 
 import { createHash, randomBytes } from "node:crypto";
@@ -19,7 +23,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyBundleIntegrity, verifyManifestConsistency } from "./bundle-integrity.mjs";
-import { assertAccessJwtTimeBounds } from "./attest-access-identity.mjs";
+import {
+  MAX_ATTESTATION_AGE_SECONDS,
+  accessJwtAgeSeconds,
+  assertAccessJwtTimeBounds,
+} from "./attest-access-identity.mjs";
 import {
   ATTEMPT_MARKER_ERROR_CODES,
   assertNoAttemptMarkers,
@@ -35,6 +43,10 @@ import {
   readPrivateFile,
   writePrivateExclusive,
 } from "./runtime-io.mjs";
+
+// Remaining freshness required before the irreversible W1/W2 ceremony.
+// This does not change the inclusive 900.000-second B1 limit and is not a CLI option.
+export const MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS = 120;
 
 export const REAL_CONFIG = Object.freeze({
   api: "https://api.cloudflare.com/client/v4",
@@ -779,6 +791,65 @@ async function runInner(argv, deps, cfg, receiptBox) {
       state.allowNext = null;
     }
   };
+  const verifyBoundAccessJwt = async (jwt, failureCode) => {
+    await verifyReviewed();
+    const freshPath = join(
+      priv,
+      `c1-access-attestation-exec-${randomBytes(12).toString("hex")}.json`,
+    );
+    let att;
+    try {
+      att = JSON.parse(await deps.attest(jwt, freshPath));
+    } catch {
+      throw new Stop(failureCode);
+    }
+    if (
+      att?.identity_attestation_status !== "VERIFIED" ||
+      att?.email_binding !== "MATCHED" ||
+      typeof att.attestation_reference !== "string"
+    )
+      throw new Stop(failureCode);
+    const fresh = readJson(deps, freshPath);
+    if (fresh.attestationRef !== att.attestation_reference) throw new Stop(failureCode);
+    for (const key of ["issuer", "subject", "email"]) {
+      if (fresh[key] !== record[key]) {
+        if (failureCode === "PRE_W1_ACCESS_FAILED") throw new Stop("PRE_W1_ACCESS_FAILED");
+        throw new Stop("FRESH_IDENTITY_MISMATCH", key);
+      }
+    }
+    try {
+      assertAccessJwtTimeBounds(jwt, { now: deps.now });
+    } catch {
+      throw new Stop(failureCode);
+    }
+  };
+  // Additional gate only. A pass here is not a promise that the post-W2 token stays fresh.
+  {
+    await deps.validateTools(approval);
+    let preW1Jwt;
+    try {
+      preW1Jwt = await deps.getAccessJwt(cfg.appUrl);
+    } catch {
+      throw new Stop("PRE_W1_ACCESS_FAILED");
+    }
+    preW1Jwt = red.add(preW1Jwt);
+    if (
+      typeof preW1Jwt !== "string" ||
+      preW1Jwt.length > 32 * 1024 ||
+      !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(preW1Jwt)
+    )
+      throw new Stop("PRE_W1_ACCESS_FAILED");
+    await verifyBoundAccessJwt(preW1Jwt, "PRE_W1_ACCESS_FAILED");
+    try {
+      const ageSeconds = accessJwtAgeSeconds(preW1Jwt, { now: deps.now });
+      if (ageSeconds > MAX_ATTESTATION_AGE_SECONDS - MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS)
+        throw new Stop("PRE_W1_ACCESS_FAILED");
+    } catch (error) {
+      if (error instanceof Stop) throw error;
+      throw new Stop("PRE_W1_ACCESS_FAILED");
+    }
+    step("pre_w1_access", "PASS pinned identity and remaining freshness budget");
+  }
 
   await d1State(cf, cfg, cfg.prestate, "PRE_W1_D1");
   step("pre_w1_d1", "PASS uninitialized");
@@ -836,29 +907,7 @@ async function runInner(argv, deps, cfg, receiptBox) {
     }
   };
   const freshAttestation = async () => {
-    await verifyReviewed();
-    const freshPath = join(
-      priv,
-      `c1-access-attestation-exec-${randomBytes(12).toString("hex")}.json`,
-    );
-    let att;
-    try {
-      att = JSON.parse(await deps.attest(jwt, freshPath));
-    } catch {
-      throw new Stop("FRESH_ATTESTATION_FAILED");
-    }
-    if (
-      att?.identity_attestation_status !== "VERIFIED" ||
-      att?.email_binding !== "MATCHED" ||
-      typeof att.attestation_reference !== "string"
-    )
-      throw new Stop("FRESH_ATTESTATION_FAILED");
-    const fresh = readJson(deps, freshPath);
-    if (fresh.attestationRef !== att.attestation_reference)
-      throw new Stop("FRESH_ATTESTATION_FAILED");
-    for (const key of ["issuer", "subject", "email"])
-      if (fresh[key] !== record[key]) throw new Stop("FRESH_IDENTITY_MISMATCH", key);
-    assertFreshTime();
+    await verifyBoundAccessJwt(jwt, "FRESH_ATTESTATION_FAILED");
   };
   await freshAttestation();
   let health;

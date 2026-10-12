@@ -14,8 +14,8 @@ Task: `ROOMAGENT_STAGE_C1_A2_HARDENING`. Implementation engineer: Hoplite. Indep
 | Baseline exact-main CI                        | [38093203477](https://github.com/takovn2/roomAgent/actions/runs/38093203477), SUCCESS                                                                   |
 | Original handoff CI                           | [38105477230](https://github.com/takovn2/roomAgent/actions/runs/38105477230), job 114369973586, FAILURE at format (12 files); subsequent checks skipped |
 | Exact implementation SHA / new CI run and job | Commit containing this report; pinned in PR/final delivery after commit, not self-embedded                                                              |
-| Operator manifest SHA-256                     | `3f93809a62fc8424caaccbe13ed6e393468b30e762f610bc28884be605755978`                                                                                      |
-| Bundle manifest SHA-256                       | `06aa52d6e96ad14fd82e875127c6b26f2a61286bae5e51c65c27b48eb28ef736`                                                                                      |
+| Operator manifest SHA-256                     | `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d`                                                                                      |
+| Bundle manifest SHA-256                       | `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`                                                                                      |
 
 Main/handoff ancestry was fetched and rechecked before implementation/publication. No reset, source-branch overwrite, force-push, dependency upgrade, migration or production Wrangler change was made. The Worker release `sourceSha` remains separate from the new operator implementation SHA.
 
@@ -95,6 +95,18 @@ The [D1 query API](https://developers.cloudflare.com/api/resources/d1/subresourc
 - Observed drift fails closed, but separate Cloudflare API reads and mutations are not a cross-resource atomic transaction. Owner-controlled exclusive change window/background writers and fresh preflight are necessary; there is no force/automatic rollback.
 - Actual per-Worker permission acceptance, current resource state, cached cloudflared session, Access forwarding, staging release and live 76-write receipt remain **NOT_VERIFIED** here. `/health` is not release attestation. Backend release/JWT/approval checks remain authoritative and unchanged.
 - Scanner checks known credential/identity/receipt patterns and forbidden tracked paths; it is a bounded heuristic, not comprehensive DLP. Independent diff/source review is still required.
+
+## PR #9 ChatGPT review remediation
+
+Reviewed head `9fbea5a00d7b8b01243d6de628cb77453e5dedff` had decision `ROOMAGENT_C1_A2_PR9_CHATGPT_REVIEW_CHANGES_REQUIRED`. The finding was operational safety: a cached Access JWT that was already stale, expired, or invalid was fetched only after W1 and W2. Attempt markers then prevented a retry even though a preflight could have stopped before mutation. This was not an authentication bypass.
+
+The runner now performs one pre-W1 Access readiness check on the execute path, after read-only reconciliation returns and before the bootstrap token is written. It uses the pinned cloudflared path already approved by `validateTools`, obtains one JWT through `getAccessJwt`, and verifies signature, issuer, audience, type, subject, normalized email, `iat`, `nbf`, and `exp` through the existing attestation child. `assertAccessJwtTimeBounds` and `accessJwtAgeSeconds` apply the unfloored millisecond clock. `MAX_ATTESTATION_AGE_SECONDS` remains 900. A separate hardcoded budget, `MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS` = 120, rejects a token with less than 120.000 seconds of remaining freshness. Exactly 120.000 seconds remaining is accepted. There is no CLI flag, refresh loop, retry, or fallback login. Failure code is `PRE_W1_ACCESS_FAILED` with no token and no identity detail.
+
+The post-W2 attestation, the post-confirmation attestation, the synchronous sample immediately before dispatch, source and digest checks, D1 and deployment prestate checks, and the durable B1 marker remain. A token that is fresh before W1 and stale after W2 still stops as `FRESH_ATTESTATION_FAILED`, keeps W1 and W2 markers, sends no B1 POST, and is not retried or rolled back. The inclusive B1 boundary is unchanged: 900000 milliseconds after confirmation is accepted; 900001 milliseconds is rejected. A token that is already 900000, 900001, or 900999 milliseconds old at the start is rejected before W1. Fractional `iat` and fractional `exp` stay exact.
+
+Negative pre-W1 cases assert zero W1 PATCH, zero W2 deployment POST, zero B1 POST, no W1/W2/B1 marker, no bootstrap token file, and no JWT or identity leak. Covered cases are stale-but-unexpired, missing `iat`, fractional `iat`, invalid signature, wrong issuer, wrong audience, wrong subject, wrong normalized email, expired JWT, fractional `exp` at its boundary, insufficient remaining budget, cloudflared command failure, and attestation child failure. A valid fresh JWT still reaches W1 and W2 and is attested again after W2. F2 descriptor behavior is unchanged. F3 remains `UNRESOLVED_MEDIUM`.
+
+Previous manifests on the reviewed head were operator `3f93809a62fc8424caaccbe13ed6e393468b30e762f610bc28884be605755978` and bundle `06aa52d6e96ad14fd82e875127c6b26f2a61286bae5e51c65c27b48eb28ef736`. The current manifests are in the authority table above. `c1-runner.mjs --verify-bundle` returns `BUNDLE_CONSISTENT_NOT_APPROVED`. Consistency is not owner approval. The next gate is a new ChatGPT source review of this exact head. Muse formal review is not requested by this patch. No Cloudflare resource was mutated.
 
 ## Independent handoff
 

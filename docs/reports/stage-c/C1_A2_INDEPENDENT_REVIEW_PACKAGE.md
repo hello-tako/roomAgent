@@ -8,20 +8,21 @@ Repository `hello-tako/roomAgent`, ID `1410359112` (transferred from `takovn2/ro
 
 PR #6 was owner-merged before these fixes were delivered. They are published separately on this follow-up branch from current main, not included in the historical PR #6 approval or merge. Hoplite performed no merge.
 
-- Inner operator manifest SHA-256: `3f93809a62fc8424caaccbe13ed6e393468b30e762f610bc28884be605755978`.
-- Outer bundle manifest SHA-256: `06aa52d6e96ad14fd82e875127c6b26f2a61286bae5e51c65c27b48eb28ef736`.
+- Inner operator manifest SHA-256: `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d`.
+- Outer bundle manifest SHA-256: `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`.
+- Reviewed head before this remediation: `9fbea5a00d7b8b01243d6de628cb77453e5dedff`, with operator `3f93809a62fc8424caaccbe13ed6e393468b30e762f610bc28884be605755978` and bundle `06aa52d6e96ad14fd82e875127c6b26f2a61286bae5e51c65c27b48eb28ef736`.
 - Detailed findings, source functions, test counts and limitations: [hardening report](C1_A2_SECURITY_HARDENING_REPORT.md).
 - Original main CI 38093203477 was SUCCESS; original handoff CI 38105477230 was FAILURE with later steps SKIPPED. Neither approves this new operator source.
 
 ## Follow-up review focus
 
-Challenge the unfloored 900.000-second mandatory safe-integer `iat` boundary, the synchronous freshness sample immediately before B1, descriptor no-follow/bigint snapshot/ancestor rechecks, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The checkpoint SQL interpolation and secret-scanner reduction are intentionally absent. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
+Challenge the pre-W1 Access gate: it must reject an already stale, expired, malformed, mis-bound, or budget-exhausted JWT before W1, keep the unfloored 900.000-second B1 limit, and keep the synchronous freshness sample immediately before B1. Also challenge descriptor no-follow/bigint snapshot/ancestor rechecks, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The 120-second remaining-freshness budget is hardcoded and is not a bypass. F3 same-UID marker replay remains unresolved. The next independent source review is ChatGPT. Muse formal review is not requested until that re-review is complete. The checkpoint SQL interpolation and secret-scanner reduction are intentionally absent. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
 
 Also inspect `apps/api/test/room-task-boundary.test.ts`: the CI fixture waits for exact legitimate setup event projections before taking no-side-effect snapshots. The original denied-command/replay assertions are retained; runtime task-room guards are unchanged.
 
 ## Reviewer source order
 
-1. `handoff/c1-a2/operator/c1-runner.mjs`: argument modes; pre-credential approval/source gates; canonical 17-field plan; exact Cloudflare allowlists/result schemas/SQL guards; W1 live body/rechecks; W2 active/latest/deployment checks; B1 fresh attestation after confirmation; no-force/no-retry; sanitized failure/receipt and read-only reconciliation.
+1. `handoff/c1-a2/operator/c1-runner.mjs`: argument modes; pre-credential approval/source gates; pre-W1 Access readiness before the bootstrap token; canonical 17-field plan; exact Cloudflare allowlists/result schemas/SQL guards; W1 live body/rechecks; W2 active/latest/deployment checks; B1 fresh attestation after confirmation and the synchronous pre-dispatch sample; no-force/no-retry; sanitized failure/receipt and read-only reconciliation.
 2. `bundle-integrity.mjs`: independently trusted outer digest, full implementation SHA, exact inner/outer coverage, private exclusion, traversal/duplicates/nonregular/symlink/ancestor rejection. Cross-check the runner's clean Git validation and repeated gates. Matching local manifests alone must not pass trusted approval.
 3. `attempt-markers.mjs`: mode 0600, exclusive/no-follow, complete non-sensitive stage metadata, full-write/file-fsync/directory-fsync ordering, failure preservation, parent identity checks, legacy block and restart semantics.
 4. `runtime-io.mjs`: 0700/0600 owner inputs, no symlinks/hard links, durable exclusive secret/receipt files, canonical allowed binary path/hash/version pins, clean actual Git source, shell-free isolated child, stdin JWT and nonzero/signal/timeout/output-cap handling.

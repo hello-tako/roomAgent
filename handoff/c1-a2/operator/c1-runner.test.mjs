@@ -29,6 +29,7 @@ import {
   validateAccessJwt,
 } from "./attest-access-identity.mjs";
 import {
+  MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS,
   REAL_CONFIG,
   Redactor,
   Stop,
@@ -404,6 +405,27 @@ const mutating = (calls) =>
   calls
     .filter((c) => c.method !== "GET" && !c.path.endsWith("/query"))
     .map((c) => `${c.method} ${c.path.replace("/client/v4", "")}`);
+function assertNoCeremony(env, world) {
+  assert.equal(world.calls.filter((c) => c.method === "PATCH").length, 0);
+  assert.equal(
+    world.calls.filter((c) => c.method === "POST" && c.path.endsWith("/deployments")).length,
+    0,
+  );
+  assert.equal(world.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+  assert.deepEqual(mutating(world.calls), []);
+  for (const name of [
+    "c1-w1-attempted",
+    "c1-w2-attempted",
+    "c1-b1-attempted",
+    "c1-bootstrap-approval-token",
+  ])
+    assert.equal(existsSync(join(env.priv, name)), false);
+}
+function tamperSignature(token) {
+  const parts = token.split(".");
+  const signature = parts[2];
+  return `${parts[0]}.${parts[1]}.${signature.slice(0, -1)}${signature.endsWith("a") ? "b" : "a"}`;
+}
 const allOutput = (outLines, e) => outLines.join("\n") + (e ? `\n${e.code} ${e.detail}` : "");
 
 test("dry-run validates offline and makes zero network calls", async () => {
@@ -1224,17 +1246,18 @@ for (const [field, value] of [
   ["subject", "different-test-subject"],
   ["email", "different@example.test"],
 ])
-  test(`fresh Access ${field} mismatch blocks B1`, async () => {
+  test(`fresh Access ${field} mismatch after W2 blocks B1 and retains markers`, async () => {
     const cfg = testConfig();
     const env = setup(cfg);
     const w = mockWorld(cfg);
     const { d, outLines } = deps(cfg, env, w);
+    let calls = 0;
     d.attest = async (_jwt, path) => {
-      writeFileSync(
-        path,
-        JSON.stringify({ ...FAKE, [field]: value, attestationRef: "c1att-fresh" }),
-        { mode: 0o600 },
-      );
+      calls++;
+      const identity = calls === 1 ? FAKE : { ...FAKE, [field]: value };
+      writeFileSync(path, JSON.stringify({ ...identity, attestationRef: "c1att-fresh" }), {
+        mode: 0o600,
+      });
       return JSON.stringify({
         identity_attestation_status: "VERIFIED",
         email_binding: "MATCHED",
@@ -1246,67 +1269,131 @@ for (const [field, value] of [
       error = e;
       return e.code === "FRESH_IDENTITY_MISMATCH";
     });
+    assert.ok(calls >= 2);
+    assert.equal(w.calls.filter((c) => c.method === "PATCH").length, 1);
+    assert.equal(
+      w.calls.filter((c) => c.method === "POST" && c.path.endsWith("/deployments")).length,
+      1,
+    );
     assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+    assert.ok(existsSync(join(env.priv, "c1-w1-attempted")));
+    assert.ok(existsSync(join(env.priv, "c1-w2-attempted")));
     assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+    const restartWorld = mockWorld(cfg);
+    const { d: restart } = deps(cfg, env, restartWorld);
+    await assert.rejects(run(["--execute"], restart, cfg), { code: "ALREADY_ATTEMPTED_W1" });
+    assert.equal(restartWorld.calls.length, 0);
     assertTransportSafe(outLines, error, [value]);
   });
 
-for (const fault of [
-  "child-exit",
-  "malformed-output",
-  "wrong-email-binding",
-  "expired-after-confirmation",
-])
-  test(`attestation ${fault} is fail-closed and suppresses child contents`, async () => {
+for (const fault of ["child-exit", "malformed-output", "wrong-email-binding"])
+  test(`pre-W1 attestation ${fault} stops before mutation and suppresses child contents`, async () => {
     const cfg = testConfig();
     const env = setup(cfg);
     const w = mockWorld(cfg);
     const { d, outLines } = deps(cfg, env, w);
-    const attest = d.attest;
-    let calls = 0;
-    d.attest = async (...args) => {
-      calls++;
-      if (fault === "child-exit" || (fault === "expired-after-confirmation" && calls === 2))
-        throw new Error(API_TOKEN + JWT + FAKE.email);
+    d.attest = async () => {
+      if (fault === "child-exit") throw new Error(API_TOKEN + JWT + FAKE.email);
       if (fault === "malformed-output") return API_TOKEN + JWT;
-      if (fault === "wrong-email-binding")
-        return JSON.stringify({
-          identity_attestation_status: "VERIFIED",
-          email_binding: "MISMATCH",
-          attestation_reference: "c1att-fresh",
-          raw: API_TOKEN,
-        });
-      return attest(...args);
+      return JSON.stringify({
+        identity_attestation_status: "VERIFIED",
+        email_binding: "MISMATCH",
+        attestation_reference: "c1att-fresh",
+        raw: API_TOKEN,
+      });
     };
     let error;
     await assert.rejects(run(["--execute"], d, cfg), (e) => {
       error = e;
-      return e.code === "FRESH_ATTESTATION_FAILED";
+      return e.code === "PRE_W1_ACCESS_FAILED";
     });
-    assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
-    assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
-    if (fault === "expired-after-confirmation") assert.equal(calls, 2);
+    assertNoCeremony(env, w);
     assertTransportSafe(outLines, error);
   });
 
-test("malformed JWT and cloudflared failure block B1 without publishing captured credentials", async () => {
+test("attestation failure after W2 confirmation retains markers and does not retry", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const { d, outLines } = deps(cfg, env, w);
+  const attest = d.attest;
+  let calls = 0;
+  d.attest = async (...args) => {
+    calls++;
+    if (calls === 3) throw new Error(API_TOKEN + JWT + FAKE.email);
+    return attest(...args);
+  };
+  let error;
+  await assert.rejects(run(["--execute"], d, cfg), (e) => {
+    error = e;
+    return e.code === "FRESH_ATTESTATION_FAILED";
+  });
+  assert.equal(calls, 3);
+  assert.equal(w.calls.filter((c) => c.method === "PATCH").length, 1);
+  assert.equal(
+    w.calls.filter((c) => c.method === "POST" && c.path.endsWith("/deployments")).length,
+    1,
+  );
+  assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+  assert.ok(existsSync(join(env.priv, "c1-w1-attempted")));
+  assert.ok(existsSync(join(env.priv, "c1-w2-attempted")));
+  assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+  const restartWorld = mockWorld(cfg);
+  const { d: restart } = deps(cfg, env, restartWorld);
+  await assert.rejects(run(["--execute"], restart, cfg), { code: "ALREADY_ATTEMPTED_W1" });
+  assert.equal(restartWorld.calls.length, 0);
+  assertTransportSafe(outLines, error);
+});
+
+test("pre-W1 malformed JWT and cloudflared failure stop before mutation", async () => {
   for (const fault of ["malformed", "child-failure"]) {
     const cfg = testConfig();
     const env = setup(cfg);
     const w = mockWorld(cfg);
     const { d, outLines } = deps(cfg, env, w);
+    const counters = instrumentSecrets(d);
     d.getAccessJwt = async () => {
+      counters.jwt++;
       if (fault === "child-failure") throw new Error(API_TOKEN + JWT);
       return "not-a-jwt";
     };
     let error;
     await assert.rejects(run(["--execute"], d, cfg), (e) => {
       error = e;
-      return e.code === (fault === "malformed" ? "ACCESS_JWT_ABSENT" : "LOCAL_GATE_FAILED");
+      return e.code === "PRE_W1_ACCESS_FAILED";
     });
-    assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+    assert.equal(counters.jwt, 1);
+    assertNoCeremony(env, w);
     assertTransportSafe(outLines, error);
   }
+});
+
+test("cloudflared failure after a fresh pre-W1 token retains W1 and W2 markers", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const { d, outLines } = deps(cfg, env, w);
+  let fetches = 0;
+  d.getAccessJwt = async () => {
+    fetches++;
+    if (fetches > 1) throw new Error(API_TOKEN + JWT);
+    return JWT;
+  };
+  let error;
+  await assert.rejects(run(["--execute"], d, cfg), (e) => {
+    error = e;
+    return e.code === "LOCAL_GATE_FAILED";
+  });
+  assert.equal(fetches, 2);
+  assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+  assert.ok(existsSync(join(env.priv, "c1-w1-attempted")));
+  assert.ok(existsSync(join(env.priv, "c1-w2-attempted")));
+  assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+  const restartWorld = mockWorld(cfg);
+  const { d: restart } = deps(cfg, env, restartWorld);
+  await assert.rejects(run(["--execute"], restart, cfg), { code: "ALREADY_ATTEMPTED_W1" });
+  assert.equal(restartWorld.calls.length, 0);
+  assertTransportSafe(outLines, error);
 });
 
 for (const fault of ["HTTP", "JSON", "schema"])
@@ -1624,10 +1711,23 @@ for (const stage of ["independent owner", "DEPLOY", "BOOTSTRAP"])
   });
 
 for (const [label, claims] of [
-  ["cached stale JWT", { iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS - 1 }],
-  ["JWT without issued-at", { iat: undefined }],
+  [
+    "cached stale-but-unexpired JWT",
+    {
+      iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS - 1,
+      nbf: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS - 1,
+      exp: NOW_SECONDS + 3600,
+    },
+  ],
+  ["JWT missing iat", { iat: undefined }],
+  ["fractional iat", { iat: NOW_SECONDS - 60.5 }],
+  ["wrong issuer", { iss: "https://untrusted.invalid" }],
+  ["wrong audience", { aud: ["wrong-audience"] }],
+  ["wrong subject", { sub: "different-test-subject" }],
+  ["wrong normalized email", { email: "other@example.test" }],
+  ["expired JWT", { exp: NOW_SECONDS }],
 ])
-  test(`${label} fails production attestation before health or B1 and is not reacquired`, async () => {
+  test(`pre-W1 rejects ${label} before mutation and does not reacquire it`, async () => {
     const cfg = testConfig();
     const env = setup(cfg);
     const w = mockWorld(cfg);
@@ -1637,16 +1737,29 @@ for (const [label, claims] of [
     let error;
     await assert.rejects(run(["--execute"], d, cfg), (e) => {
       error = e;
-      return e.code === "FRESH_ATTESTATION_FAILED";
+      return e.code === "PRE_W1_ACCESS_FAILED";
     });
     assert.equal(counters.jwt, 1);
-    assert.equal(
-      w.calls.filter((c) => ["/health", "/operator/staging-bootstrap"].includes(c.path)).length,
-      0,
-    );
-    assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
-    assertTransportSafe(outLines, error, [accessToken]);
+    assertNoCeremony(env, w);
+    assertTransportSafe(outLines, error, [accessToken, FAKE.subject, FAKE.email]);
   });
+
+test("pre-W1 rejects an invalid signature before mutation", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const accessToken = tamperSignature(signedAccessJwt());
+  const { d, outLines } = deps(cfg, env, w, { accessToken });
+  const counters = instrumentSecrets(d);
+  let error;
+  await assert.rejects(run(["--execute"], d, cfg), (e) => {
+    error = e;
+    return e.code === "PRE_W1_ACCESS_FAILED";
+  });
+  assert.equal(counters.jwt, 1);
+  assertNoCeremony(env, w);
+  assertTransportSafe(outLines, error, [accessToken]);
+});
 
 for (const reason of ["stale", "expired"])
   test(`token ${reason} during human confirmation blocks B1`, async () => {
@@ -1672,10 +1785,21 @@ for (const reason of ["stale", "expired"])
       error = e;
       return e.code === "FRESH_ATTESTATION_FAILED";
     });
-    assert.equal(counters.jwt, 1);
+    assert.equal(counters.jwt, 2);
     assert.equal(w.calls.filter((c) => c.path === "/health").length, 1);
+    assert.equal(w.calls.filter((c) => c.method === "PATCH").length, 1);
+    assert.equal(
+      w.calls.filter((c) => c.method === "POST" && c.path.endsWith("/deployments")).length,
+      1,
+    );
     assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+    assert.ok(existsSync(join(env.priv, "c1-w1-attempted")));
+    assert.ok(existsSync(join(env.priv, "c1-w2-attempted")));
     assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+    const restartWorld = mockWorld(cfg);
+    const { d: restart } = deps(cfg, env, restartWorld);
+    await assert.rejects(run(["--execute"], restart, cfg), { code: "ALREADY_ATTEMPTED_W1" });
+    assert.equal(restartWorld.calls.length, 0);
     assertTransportSafe(outLines, error, [accessToken]);
   });
 
@@ -1717,7 +1841,7 @@ for (const reason of ["stale", "expired"])
       return result;
     };
     intercept(d, (_url, _init, res) => {
-      if (attestations === 2)
+      if (attestations === 3)
         nowSeconds = NOW_SECONDS + (reason === "expired" ? 600 : MAX_ATTESTATION_AGE_SECONDS + 1);
       return res;
     });
@@ -1726,9 +1850,20 @@ for (const reason of ["stale", "expired"])
       error = e;
       return e.code === "FRESH_ATTESTATION_FAILED";
     });
-    assert.equal(attestations, 2);
+    assert.equal(attestations, 3);
+    assert.equal(w.calls.filter((c) => c.method === "PATCH").length, 1);
+    assert.equal(
+      w.calls.filter((c) => c.method === "POST" && c.path.endsWith("/deployments")).length,
+      1,
+    );
     assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+    assert.ok(existsSync(join(env.priv, "c1-w1-attempted")));
+    assert.ok(existsSync(join(env.priv, "c1-w2-attempted")));
     assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+    const restartWorld = mockWorld(cfg);
+    const { d: restart } = deps(cfg, env, restartWorld);
+    await assert.rejects(run(["--execute"], restart, cfg), { code: "ALREADY_ATTEMPTED_W1" });
+    assert.equal(restartWorld.calls.length, 0);
     assertTransportSafe(outLines, error, [accessToken]);
   });
 
@@ -1777,10 +1912,125 @@ for (const elapsedMilliseconds of [900000, 900001])
       assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
     } else {
       await assert.rejects(run(["--execute"], d, cfg), { code: "FRESH_ATTESTATION_FAILED" });
+      assert.equal(w.calls.filter((c) => c.method === "PATCH").length, 1);
+      assert.equal(
+        w.calls.filter((c) => c.method === "POST" && c.path.endsWith("/deployments")).length,
+        1,
+      );
       assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+      assert.ok(existsSync(join(env.priv, "c1-w1-attempted")));
+      assert.ok(existsSync(join(env.priv, "c1-w2-attempted")));
       assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
     }
   });
+
+test("fresh JWT passes pre-W1 and still re-attests after W2 before B1", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const { d } = deps(cfg, env, w);
+  const counters = instrumentSecrets(d);
+  const attest = d.attest;
+  let attestations = 0;
+  d.attest = async (...args) => {
+    attestations++;
+    return attest(...args);
+  };
+  assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
+  assert.equal(counters.jwt, 2);
+  assert.equal(attestations, 3);
+  assert.equal(mutating(w.calls).length, 3);
+});
+
+test("pre-W1 accepts exactly 120.000s of remaining freshness", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const ageMilliseconds =
+    (MAX_ATTESTATION_AGE_SECONDS - MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS) * 1000;
+  const { d } = deps(cfg, env, w, {
+    accessToken: signedAccessJwt({ iat: NOW_SECONDS, nbf: NOW_SECONDS }),
+    now: () => NOW_SECONDS * 1000 + ageMilliseconds,
+  });
+  assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
+  assert.equal(w.calls.filter((c) => c.method === "PATCH").length, 1);
+  assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
+});
+
+test("pre-W1 rejects one millisecond under the remaining freshness budget", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const ageMilliseconds =
+    (MAX_ATTESTATION_AGE_SECONDS - MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS) * 1000 + 1;
+  const accessToken = signedAccessJwt({ iat: NOW_SECONDS, nbf: NOW_SECONDS });
+  const { d, outLines } = deps(cfg, env, w, {
+    accessToken,
+    now: () => NOW_SECONDS * 1000 + ageMilliseconds,
+  });
+  const counters = instrumentSecrets(d);
+  let error;
+  await assert.rejects(run(["--execute"], d, cfg), (e) => {
+    error = e;
+    return e.code === "PRE_W1_ACCESS_FAILED";
+  });
+  assert.equal(counters.jwt, 1);
+  assertNoCeremony(env, w);
+  assertTransportSafe(outLines, error, [accessToken]);
+});
+
+for (const elapsedMilliseconds of [900000, 900001, 900999])
+  test(`pre-W1 applies the unfloored clock to an already elapsed ${elapsedMilliseconds}ms token`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    const accessToken = signedAccessJwt({
+      iat: NOW_SECONDS,
+      nbf: NOW_SECONDS,
+      exp: NOW_SECONDS + 3600,
+    });
+    const { d, outLines } = deps(cfg, env, w, {
+      accessToken,
+      now: () => NOW_SECONDS * 1000 + elapsedMilliseconds,
+    });
+    let error;
+    await assert.rejects(run(["--execute"], d, cfg), (e) => {
+      error = e;
+      return e.code === "PRE_W1_ACCESS_FAILED";
+    });
+    assertNoCeremony(env, w);
+    assertTransportSafe(outLines, error, [accessToken]);
+  });
+
+test("pre-W1 rejects a fractional exp at its exact boundary", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const accessToken = signedAccessJwt({ iat: NOW_SECONDS, exp: NOW_SECONDS + 0.5 });
+  const { d, outLines } = deps(cfg, env, w, {
+    accessToken,
+    now: () => NOW_SECONDS * 1000 + 500,
+  });
+  let error;
+  await assert.rejects(run(["--execute"], d, cfg), (e) => {
+    error = e;
+    return e.code === "PRE_W1_ACCESS_FAILED";
+  });
+  assertNoCeremony(env, w);
+  assertTransportSafe(outLines, error, [accessToken]);
+});
+
+test("pre-W1 accepts a fractional exp one millisecond before it lapses", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const { d } = deps(cfg, env, w, {
+    accessToken: signedAccessJwt({ iat: NOW_SECONDS, exp: NOW_SECONDS + 0.5 }),
+    now: () => NOW_SECONDS * 1000 + 499,
+  });
+  assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
+  assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
+});
 
 for (const fault of [
   "symlink-replacement",
