@@ -1,19 +1,28 @@
 # C1-A2 independent review package — Muse
 
-Status: implementation handoff only. **Muse review/GATE B and human mutation approval are PENDING.** Hoplite is not the independent reviewer or production operator. No live runtime or production certification is issued.
+Status: implementation handoff only. **Review of the updated source and human mutation approval are PENDING.** The [Muse review](https://github.com/takovn2/roomAgent/pull/6#pullrequestreview-5481983056) approved the earlier `f7e5142` head; it is not approval of these follow-up changes. Hoplite is not the independent reviewer or production operator. No live runtime or production certification is issued.
 
 ## Exact evidence coordinates
 
-Repository `takovn2/roomAgent`, ID `1410359112`; branch `fix/roomagent-c1-a2-security-hardening`. Baseline main/Worker source `3909fada8747ae27ea71daf6da9481a7eb8d9eff`; original handoff `6fac326a7fd3f504a51c23372485af252012e2c8`. The implementation SHA, PR URL, exact-head CI run/job IDs and conclusion are in the PR/final handoff after commit. This avoids self-referential commit/manifests. Review the commit, not a mutable branch label.
+Repository `hello-tako/roomAgent`, ID `1410359112` (transferred from `takovn2/roomAgent`); branch `fix/roomagent-c1-a2-security-hardening--review-follow-up`. Baseline main/Worker source `3909fada8747ae27ea71daf6da9481a7eb8d9eff`; original handoff `6fac326a7fd3f504a51c23372485af252012e2c8`. The implementation SHA, PR URL, exact-head CI run/job IDs and conclusion are in the PR/final handoff after commit. This avoids self-referential commit/manifests. Review the commit, not a mutable branch label.
 
-- Inner operator manifest SHA-256: `7eca37cca11f12cb8d20e0a00b773bb13e4c54b5f3031e23b8e646572a31343a`.
-- Outer bundle manifest SHA-256: `a6dbba6cd9a873118517b534917edc4904300c50810f403889571ff7f910c8b4`.
+PR #6 was owner-merged before these fixes were delivered. They are published separately on this follow-up branch from current main, not included in the historical PR #6 approval or merge. Hoplite performed no merge.
+
+- Inner operator manifest SHA-256: `6609c3e77b3788578ec97016a01f12e9b794290822a402d017b4b88032670fe5`.
+- Outer bundle manifest SHA-256: `1037cb2f72c2b45c539035a18e24696d80464332c7ad82d1dcc10da5c3df7a7e`.
+- Reviewed head `b0180c0a3676ee5ede173c00d0e027726d516e01` used operator `1904bfc78d0ec11c4ac5a69c08d7638bfef409531fc4e3cabd490839437d9d9d` and bundle `30270c0d1a5c86c5259b622b5c110ac7317e057e332aa228ae791964bbdb0f57`.
 - Detailed findings, source functions, test counts and limitations: [hardening report](C1_A2_SECURITY_HARDENING_REPORT.md).
 - Original main CI 38093203477 was SUCCESS; original handoff CI 38105477230 was FAILURE with later steps SKIPPED. Neither approves this new operator source.
 
+## Follow-up review focus
+
+Challenge the pre-W1 effective remaining lifetime `min(iat + 900 - now, exp - now)`, including the second sample after the asynchronous preflight and before the bootstrap token. A JWT with under 120.000 seconds until `exp` must stop before W1. Keep the unfloored 900.000-second B1 limit and the synchronous freshness sample immediately before B1. Also challenge descriptor no-follow/bigint snapshot/ancestor rechecks, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The 120-second threshold is hardcoded and is not a bypass. F3 same-UID marker replay remains unresolved. The next independent source review is ChatGPT. Muse formal review is not requested until that re-review is complete. The checkpoint SQL interpolation and secret-scanner reduction are intentionally absent. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
+
+Also inspect `apps/api/test/room-task-boundary.test.ts`: the CI fixture waits for exact legitimate setup event projections before taking no-side-effect snapshots. The original denied-command/replay assertions are retained; runtime task-room guards are unchanged.
+
 ## Reviewer source order
 
-1. `handoff/c1-a2/operator/c1-runner.mjs`: argument modes; pre-credential approval/source gates; canonical 17-field plan; exact Cloudflare allowlists/result schemas/SQL guards; W1 live body/rechecks; W2 active/latest/deployment checks; B1 fresh attestation after confirmation; no-force/no-retry; sanitized failure/receipt and read-only reconciliation.
+1. `handoff/c1-a2/operator/c1-runner.mjs`: argument modes; pre-credential approval/source gates; pre-W1 Access readiness before the bootstrap token; canonical 17-field plan; exact Cloudflare allowlists/result schemas/SQL guards; W1 live body/rechecks; W2 active/latest/deployment checks; B1 fresh attestation after confirmation and the synchronous pre-dispatch sample; no-force/no-retry; sanitized failure/receipt and read-only reconciliation.
 2. `bundle-integrity.mjs`: independently trusted outer digest, full implementation SHA, exact inner/outer coverage, private exclusion, traversal/duplicates/nonregular/symlink/ancestor rejection. Cross-check the runner's clean Git validation and repeated gates. Matching local manifests alone must not pass trusted approval.
 3. `attempt-markers.mjs`: mode 0600, exclusive/no-follow, complete non-sensitive stage metadata, full-write/file-fsync/directory-fsync ordering, failure preservation, parent identity checks, legacy block and restart semantics.
 4. `runtime-io.mjs`: 0700/0600 owner inputs, no symlinks/hard links, durable exclusive secret/receipt files, canonical allowed binary path/hash/version pins, clean actual Git source, shell-free isolated child, stdin JWT and nonzero/signal/timeout/output-cap handling.
@@ -47,6 +56,8 @@ Check exact remote head/base ancestry, new push/PR CI conclusions (not historica
 
 Muse must assess the documented owner-file/independent-pin trust boundary, same-owner filesystem/running-process assumptions, POSIX durability support, API non-atomicity/exclusive change window, background D1 writers, binary build pins, A2 plaintext token at-rest retention and revocation/rotation. The human owner must approve those and all future operational scope; Hoplite does not grant it.
 
+Review F3 remains a trust-model limit: a same-UID directory owner or root can remove attempt markers/private evidence and permit replay. Exclusive creation and fsync protect against crashes, races and retained markers, not deliberate owner deletion. Evidence retention is mandatory; independently controlled tamper-resistant storage would require a separate owner-approved design. The bounded credential scanner is also not comprehensive DLP. Neither limitation is claimed fixed by green tests or this report.
+
 Live Cloudflare permissions/resource state, Access forwarding/token/session, staging release/runtime, C1 76-write receipt, C2/business flow and production certification remain NOT_VERIFIED. No operator test or dry-run certifies a live identity/account/Worker/database. This task performed source/CI/GitHub delivery only, not Cloudflare mutations or merge.
 
 ## Authoritative protocol references
@@ -55,3 +66,4 @@ Live Cloudflare permissions/resource state, Access forwarding/token/session, sta
 - [Beta Worker Versions](https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/subresources/versions/): top-level version metadata and `include=modules`/`content_base64`.
 - [Deployment list](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/list/) and [create](https://developers.cloudflare.com/api/resources/workers/subresources/scripts/subresources/deployments/methods/create/): active-first deployment, percentage versions, no force.
 - [Access JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/) and [CLI guide](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/): client `cf-access-token`, Access-origin assertion, `cloudflared access token -app=...`. Wire behavior is documented/tested locally, not certified live here.
+- [D1 query API](https://developers.cloudflare.com/api/resources/d1/subresources/database/methods/query/): optional string `params` bind the organization-name predicate without changing the read-only SQL allowlist.

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import {
   lstatSync,
   mkdirSync,
@@ -9,6 +10,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -120,6 +122,27 @@ function expectCode(operation, code) {
     operation,
     (error) => error?.code === code && error.message === code && error.cause === undefined,
   );
+}
+
+function withFsOverrides(overrides, operation) {
+  const originals = new Map();
+  for (const [name, replace] of Object.entries(overrides)) {
+    const original = fs[name];
+    originals.set(name, original);
+    fs[name] = replace(original);
+  }
+
+  try {
+    return operation();
+  } finally {
+    for (const [name, original] of originals) fs[name] = original;
+  }
+}
+
+function fsError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
 }
 
 function replaceTrustedManifestDigest(bundle, digest) {
@@ -341,4 +364,380 @@ test("excludes only operator/private runtime data and rejects private symlinks",
   rmSync(privateDir, { recursive: true, force: true });
   symlinkSync(outsideDir, privateDir, "dir");
   expectCode(() => verify(bundle), "BUNDLE_PATH_SYMLINK");
+});
+
+test("rejects a symlink swapped in after path inspection and before open", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  const outside = join(bundle.bundleDir, "..", "outside-runner.mjs");
+  writeFileSync(outside, "outside\n");
+  let swapped = false;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          if (path === runner && !swapped) {
+            swapped = true;
+            unlinkSync(runner);
+            symlinkSync(outside, runner);
+          }
+          return original(path, ...args);
+        },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_PATH_SYMLINK"),
+  );
+
+  assert.equal(swapped, true);
+});
+
+test("rejects a regular file replacement between path inspection and open", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  let replaced = false;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          if (path === runner && !replaced) {
+            replaced = true;
+            renameSync(runner, runner + ".original");
+            writeFileSync(runner, "replacement\n");
+          }
+          return original(path, ...args);
+        },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_FILE_CHANGED"),
+  );
+
+  assert.equal(replaced, true);
+});
+
+test("reads from the opened descriptor and rejects a pathname replacement during read", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  const originalContents = readFileSync(runner);
+  const openedPaths = new Map();
+  let replaced = false;
+  let bytesRead;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          const descriptor = original(path, ...args);
+          openedPaths.set(descriptor, path);
+          return descriptor;
+        },
+      readFileSync:
+        (original) =>
+        (pathOrDescriptor, ...args) => {
+          if (openedPaths.get(pathOrDescriptor) === runner && !replaced) {
+            replaced = true;
+            renameSync(runner, runner + ".original");
+            writeFileSync(runner, "replacement\n");
+          }
+          const bytes = original(pathOrDescriptor, ...args);
+          if (openedPaths.get(pathOrDescriptor) === runner) bytesRead = bytes;
+          return bytes;
+        },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_FILE_CHANGED"),
+  );
+
+  assert.equal(replaced, true);
+  assert.deepEqual(bytesRead, originalContents);
+});
+
+test("rejects descriptor device or inode changes after open", (t) => {
+  for (const field of ["dev", "ino"]) {
+    const bundle = createBundle(t);
+    const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+    assert.equal(readFileSync(runner, "utf8"), "runner\n");
+    const openedPaths = new Map();
+    let changed = false;
+
+    withFsOverrides(
+      {
+        openSync:
+          (original) =>
+          (path, ...args) => {
+            const descriptor = original(path, ...args);
+            openedPaths.set(descriptor, path);
+            return descriptor;
+          },
+        fstatSync:
+          (original) =>
+          (descriptor, ...args) => {
+            const stat = original(descriptor, ...args);
+            if (openedPaths.get(descriptor) !== runner) return stat;
+            changed = true;
+            return {
+              dev: field === "dev" ? stat.dev + 1n : stat.dev,
+              ino: field === "ino" ? stat.ino + 1n : stat.ino,
+              uid: stat.uid,
+              gid: stat.gid,
+              mode: stat.mode,
+              size: stat.size,
+              mtimeNs: stat.mtimeNs,
+              ctimeNs: stat.ctimeNs,
+              isFile: () => stat.isFile(),
+              isDirectory: () => stat.isDirectory(),
+              isSymbolicLink: () => stat.isSymbolicLink(),
+            };
+          },
+      },
+      () => expectCode(() => verify(bundle), "BUNDLE_FILE_CHANGED"),
+    );
+
+    assert.equal(changed, true);
+  }
+});
+
+test("rejects a directory swapped in where a regular file was inspected", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  const openedPaths = new Map();
+  let replaced = false;
+  let closed = false;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          if (path === runner && !replaced) {
+            replaced = true;
+            renameSync(runner, runner + ".original");
+            mkdirSync(runner);
+          }
+          const descriptor = original(path, ...args);
+          openedPaths.set(descriptor, path);
+          return descriptor;
+        },
+      closeSync: (original) => (descriptor) => {
+        if (openedPaths.get(descriptor) === runner) closed = true;
+        return original(descriptor);
+      },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_FILE_NOT_REGULAR"),
+  );
+
+  assert.equal(replaced, true);
+  assert.equal(closed, true);
+});
+
+test("detects truncation after descriptor inspection", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  const openedPaths = new Map();
+  let truncated = false;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          const descriptor = original(path, ...args);
+          openedPaths.set(descriptor, path);
+          return descriptor;
+        },
+      readFileSync:
+        (original) =>
+        (pathOrDescriptor, ...args) => {
+          if (openedPaths.get(pathOrDescriptor) === runner && !truncated) {
+            truncated = true;
+            truncateSync(runner, 1);
+          }
+          return original(pathOrDescriptor, ...args);
+        },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_FILE_CHANGED"),
+  );
+
+  assert.equal(truncated, true);
+});
+
+test("fails closed when an inspected bundle file cannot be opened", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  let denied = false;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          if (path === runner) {
+            denied = true;
+            throw fsError("EACCES");
+          }
+          return original(path, ...args);
+        },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_READ_FAILED"),
+  );
+
+  assert.equal(denied, true);
+});
+
+test("fails closed when the no-follow open primitive is unsupported", (t) => {
+  const bundle = createBundle(t);
+  let attempted = false;
+
+  withFsOverrides(
+    {
+      openSync: () => () => {
+        attempted = true;
+        throw fsError("ENOTSUP");
+      },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_SAFE_OPEN_UNSUPPORTED"),
+  );
+
+  assert.equal(attempted, true);
+});
+
+test("closes a descriptor after a failed descriptor read", (t) => {
+  const bundle = createBundle(t);
+  const openedPaths = new Map();
+  let closeCount = 0;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          const descriptor = original(path, ...args);
+          openedPaths.set(descriptor, path);
+          return descriptor;
+        },
+      readFileSync:
+        (original) =>
+        (pathOrDescriptor, ...args) => {
+          if (typeof pathOrDescriptor === "number") throw fsError("EIO");
+          return original(pathOrDescriptor, ...args);
+        },
+      closeSync: (original) => (descriptor) => {
+        if (openedPaths.has(descriptor)) closeCount += 1;
+        return original(descriptor);
+      },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_READ_FAILED"),
+  );
+
+  assert.equal(closeCount, 1);
+});
+
+test("fails closed when descriptor close reports an error after a successful read", (t) => {
+  const bundle = createBundle(t);
+  const manifest = join(bundle.bundleDir, OUTER_MANIFEST_PATH);
+  const openedPaths = new Map();
+  let closeCount = 0;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          const descriptor = original(path, ...args);
+          openedPaths.set(descriptor, path);
+          return descriptor;
+        },
+      closeSync: (original) => (descriptor) => {
+        if (openedPaths.get(descriptor) === manifest) {
+          closeCount += 1;
+          original(descriptor);
+          throw fsError("EIO");
+        }
+        return original(descriptor);
+      },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_DESCRIPTOR_CLOSE_FAILED"),
+  );
+
+  assert.equal(closeCount, 1);
+});
+
+test("rejects an ancestor directory replaced with a symlink during open", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  const operator = join(bundle.bundleDir, "operator");
+  const movedOperator = join(bundle.bundleDir, "operator-real");
+  const openedPaths = new Map();
+  let swapped = false;
+  let closed = false;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          if (path === runner && !swapped) {
+            swapped = true;
+            renameSync(operator, movedOperator);
+            symlinkSync(movedOperator, operator, "dir");
+          }
+          const descriptor = original(path, ...args);
+          openedPaths.set(descriptor, path);
+          return descriptor;
+        },
+      closeSync: (original) => (descriptor) => {
+        if (openedPaths.get(descriptor) === runner) closed = true;
+        return original(descriptor);
+      },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_PATH_SYMLINK"),
+  );
+
+  assert.equal(swapped, true);
+  assert.equal(closed, true);
+});
+
+test("rechecks ancestor snapshots after reading from an opened descriptor", (t) => {
+  const bundle = createBundle(t);
+  const runner = join(bundle.bundleDir, "operator/c1-runner.mjs");
+  const operator = join(bundle.bundleDir, "operator");
+  const movedOperator = join(bundle.bundleDir, "operator-real");
+  const openedPaths = new Map();
+  let swapped = false;
+  let readFromDescriptor = false;
+  let closed = false;
+
+  withFsOverrides(
+    {
+      openSync:
+        (original) =>
+        (path, ...args) => {
+          const descriptor = original(path, ...args);
+          openedPaths.set(descriptor, path);
+          return descriptor;
+        },
+      readFileSync:
+        (original) =>
+        (pathOrDescriptor, ...args) => {
+          if (openedPaths.get(pathOrDescriptor) === runner && !swapped) {
+            swapped = true;
+            renameSync(operator, movedOperator);
+            symlinkSync(movedOperator, operator, "dir");
+          }
+          const bytes = original(pathOrDescriptor, ...args);
+          if (openedPaths.get(pathOrDescriptor) === runner) readFromDescriptor = true;
+          return bytes;
+        },
+      closeSync: (original) => (descriptor) => {
+        if (openedPaths.get(descriptor) === runner) closed = true;
+        return original(descriptor);
+      },
+    },
+    () => expectCode(() => verify(bundle), "BUNDLE_PATH_SYMLINK"),
+  );
+
+  assert.equal(swapped, true);
+  assert.equal(readFromDescriptor, true);
+  assert.equal(closed, true);
 });

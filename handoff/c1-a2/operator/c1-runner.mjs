@@ -12,6 +12,12 @@
 //
 // Remote mutations, in order, at most once each: W1 PATCH versions/latest (no deploy),
 // W2 POST deployments [{NEW,100}] (no force), B1 POST /operator/staging-bootstrap.
+// Before the bootstrap token is persisted, pre-W1 Access checks use the pinned
+// cloudflared binary and the existing attestation child. Effective remaining
+// lifetime is min(iat + 900 - now, exp - now) and must be at least 120 seconds.
+// The clock is sampled again after the read-only preflight and before W1.
+// This does not replace the post-W2 attestation or the sample immediately before
+// B1, and it does not refresh or retry a rejected token.
 // Unknown outcome on any of them = STOP, no retry. No human session. No retirement.
 
 import { createHash, randomBytes } from "node:crypto";
@@ -19,6 +25,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyBundleIntegrity, verifyManifestConsistency } from "./bundle-integrity.mjs";
+import {
+  accessJwtEffectiveRemainingSeconds,
+  assertAccessJwtTimeBounds,
+} from "./attest-access-identity.mjs";
 import {
   ATTEMPT_MARKER_ERROR_CODES,
   assertNoAttemptMarkers,
@@ -34,6 +44,10 @@ import {
   readPrivateFile,
   writePrivateExclusive,
 } from "./runtime-io.mjs";
+
+// Minimum effective remaining lifetime before W1. It applies to both the 900-second
+// issuance window and the JWT exp, and it does not change the inclusive B1 age limit.
+export const MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS = 120;
 
 export const REAL_CONFIG = Object.freeze({
   api: "https://api.cloudflare.com/client/v4",
@@ -382,10 +396,12 @@ export function makeCf(ctx) {
       throw new Stop(mutation ? "UNKNOWN_OUTCOME" : "CF_RESPONSE_INVALID");
     return json.result;
   }
-  async function d1(sql) {
+  async function d1(sql, params = []) {
     assertReadOnlySql(sql);
+    if (!Array.isArray(params)) throw new Stop("D1_PARAMS_INVALID");
+    for (const value of params) if (typeof value !== "string") throw new Stop("D1_PARAMS_INVALID");
     const result = await request("POST", `/accounts/${cfg.accountId}/d1/database/${cfg.d1}/query`, {
-      body: { sql },
+      body: params.length ? { sql, params } : { sql },
     });
     const r = result?.[0];
     if (!r || r.meta?.changed_db !== false || r.meta?.rows_written !== 0)
@@ -554,9 +570,9 @@ export async function d1State(cf, cfg, expected, label) {
     throw new Stop(`${label}_LEDGER_MISMATCH`);
   const fk = await cf.d1("PRAGMA foreign_key_check");
   if (fk.length !== 0) throw new Stop(`${label}_FOREIGN_KEY_VIOLATION`);
-  const orgName = cfg.orgName.replace(/'/g, "''");
   const [c] = await cf.d1(
-    `SELECT (SELECT COUNT(*) FROM organizations WHERE name = '${orgName}') AS org_named, (SELECT COUNT(*) FROM organizations) AS org_total, (SELECT COUNT(*) FROM human_users) AS human_users, (SELECT COUNT(*) FROM human_identities) AS identities, (SELECT COUNT(*) FROM roles) AS roles, (SELECT COUNT(*) FROM role_permissions) AS role_permissions, (SELECT COUNT(*) FROM employees) AS employees, (SELECT COUNT(*) FROM rooms) AS rooms, (SELECT COUNT(*) FROM tasks) AS tasks, (SELECT COUNT(*) FROM permissions) AS permissions`,
+    "SELECT (SELECT COUNT(*) FROM organizations WHERE name = ?) AS org_named, (SELECT COUNT(*) FROM organizations) AS org_total, (SELECT COUNT(*) FROM human_users) AS human_users, (SELECT COUNT(*) FROM human_identities) AS identities, (SELECT COUNT(*) FROM roles) AS roles, (SELECT COUNT(*) FROM role_permissions) AS role_permissions, (SELECT COUNT(*) FROM employees) AS employees, (SELECT COUNT(*) FROM rooms) AS rooms, (SELECT COUNT(*) FROM tasks) AS tasks, (SELECT COUNT(*) FROM permissions) AS permissions",
+    [cfg.orgName],
   );
   const safe = {};
   for (const k of Object.keys(cfg.prestate)) {
@@ -776,20 +792,83 @@ async function runInner(argv, deps, cfg, receiptBox) {
       state.allowNext = null;
     }
   };
+  const verifyBoundAccessJwt = async (jwt, failureCode) => {
+    await verifyReviewed();
+    const freshPath = join(
+      priv,
+      `c1-access-attestation-exec-${randomBytes(12).toString("hex")}.json`,
+    );
+    let att;
+    try {
+      att = JSON.parse(await deps.attest(jwt, freshPath));
+    } catch {
+      throw new Stop(failureCode);
+    }
+    if (
+      att?.identity_attestation_status !== "VERIFIED" ||
+      att?.email_binding !== "MATCHED" ||
+      typeof att.attestation_reference !== "string"
+    )
+      throw new Stop(failureCode);
+    const fresh = readJson(deps, freshPath);
+    if (fresh.attestationRef !== att.attestation_reference) throw new Stop(failureCode);
+    for (const key of ["issuer", "subject", "email"]) {
+      if (fresh[key] !== record[key]) {
+        if (failureCode === "PRE_W1_ACCESS_FAILED") throw new Stop("PRE_W1_ACCESS_FAILED");
+        throw new Stop("FRESH_IDENTITY_MISMATCH", key);
+      }
+    }
+    try {
+      assertAccessJwtTimeBounds(jwt, { now: deps.now });
+    } catch {
+      throw new Stop(failureCode);
+    }
+  };
+  // Additional gate only. A pass here is not a promise that the post-W2 token stays fresh.
+  let preW1Jwt;
+  const assertPreW1Budget = () => {
+    let remaining;
+    try {
+      remaining = accessJwtEffectiveRemainingSeconds(preW1Jwt, { now: deps.now });
+    } catch {
+      throw new Stop("PRE_W1_ACCESS_FAILED");
+    }
+    if (!(remaining >= MIN_PRE_W1_REMAINING_FRESHNESS_SECONDS))
+      throw new Stop("PRE_W1_ACCESS_FAILED");
+  };
+  await deps.validateTools(approval);
+  try {
+    preW1Jwt = await deps.getAccessJwt(cfg.appUrl);
+  } catch {
+    throw new Stop("PRE_W1_ACCESS_FAILED");
+  }
+  preW1Jwt = red.add(preW1Jwt);
+  if (
+    typeof preW1Jwt !== "string" ||
+    preW1Jwt.length > 32 * 1024 ||
+    !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(preW1Jwt)
+  )
+    throw new Stop("PRE_W1_ACCESS_FAILED");
+  await verifyBoundAccessJwt(preW1Jwt, "PRE_W1_ACCESS_FAILED");
+  assertPreW1Budget();
+  step("pre_w1_access", "PASS pinned identity and effective remaining lifetime");
 
   await d1State(cf, cfg, cfg.prestate, "PRE_W1_D1");
   step("pre_w1_d1", "PASS uninitialized");
   const bindings18 = await preW1(cf, cfg);
   step("pre_w1_worker", "PASS pinned base, live bindings, no secrets and code parity");
+  const freshBindings = await preW1(cf, cfg);
+  if (bindingsHash(freshBindings) !== bindingsHash(bindings18)) throw new Stop("DRIFT_BINDINGS");
+  await d1State(cf, cfg, cfg.prestate, "PRE_W1_FINAL_D1");
+  await verifyReviewed();
+  // Sample the clock again. The earlier pass must not be reused after those awaits.
+  assertPreW1Budget();
+  step("pre_w1_access_final", "PASS effective remaining lifetime immediately before W1");
   const token = red.add(randomBytes(32).toString("hex"));
   if (token === cfg.digest) throw new Stop("APPROVAL_TOKEN_DERIVED");
   deps.writeExclusive(join(priv, "c1-bootstrap-approval-token"), `${token}\n`);
   receipt.approval_token_sha256 = sha256hex(token);
-  const freshBindings = await preW1(cf, cfg);
-  if (bindingsHash(freshBindings) !== bindingsHash(bindings18)) throw new Stop("DRIFT_BINDINGS");
-  await d1State(cf, cfg, cfg.prestate, "PRE_W1_FINAL_D1");
   const body = buildW1Body(freshBindings, { token }, cfg);
-  await verifyReviewed();
   mark("W1", { baseVersion: cfg.baseVersion });
   const w1 = await mutate("PATCH", `${W(cfg)}/versions/latest`, body);
   const newId = w1.id;
@@ -825,29 +904,15 @@ async function runInner(argv, deps, cfg, receiptBox) {
     !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(jwt)
   )
     throw new Stop("ACCESS_JWT_ABSENT");
-  const freshAttestation = async () => {
-    await verifyReviewed();
-    const freshPath = join(
-      priv,
-      `c1-access-attestation-exec-${randomBytes(12).toString("hex")}.json`,
-    );
-    let att;
+  const assertFreshTime = () => {
     try {
-      att = JSON.parse(await deps.attest(jwt, freshPath));
+      assertAccessJwtTimeBounds(jwt, { now: deps.now });
     } catch {
       throw new Stop("FRESH_ATTESTATION_FAILED");
     }
-    if (
-      att?.identity_attestation_status !== "VERIFIED" ||
-      att?.email_binding !== "MATCHED" ||
-      typeof att.attestation_reference !== "string"
-    )
-      throw new Stop("FRESH_ATTESTATION_FAILED");
-    const fresh = readJson(deps, freshPath);
-    if (fresh.attestationRef !== att.attestation_reference)
-      throw new Stop("FRESH_ATTESTATION_FAILED");
-    for (const key of ["issuer", "subject", "email"])
-      if (fresh[key] !== record[key]) throw new Stop("FRESH_IDENTITY_MISMATCH", key);
+  };
+  const freshAttestation = async () => {
+    await verifyBoundAccessJwt(jwt, "FRESH_ATTESTATION_FAILED");
   };
   await freshAttestation();
   let health;
@@ -873,9 +938,12 @@ async function runInner(argv, deps, cfg, receiptBox) {
   await postW2(cf, cfg, newId, w2.id);
   await d1State(cf, cfg, cfg.prestate, "PRE_B1_FINAL_D1");
   await verifyReviewed();
+  assertFreshTime();
   mark("B1", { newVersionId: newId, newDeploymentId: w2.id });
   let res;
   let out;
+  // No asynchronous work between this final clock sample and dispatch.
+  assertFreshTime();
   try {
     res = await deps.fetch(`${cfg.appUrl}/operator/staging-bootstrap`, {
       method: "POST",
@@ -974,6 +1042,7 @@ async function realDeps(opDir) {
     readSecret: readHidden,
     prompt,
     fetch: globalThis.fetch,
+    now: Date.now,
     getImplementationSha: (approval) => implementationHead(approval, resolve(opDir, "../../..")),
     assertCommittedBundle: (approval) =>
       assertCommittedBundle(approval, resolve(opDir, "../../..")),

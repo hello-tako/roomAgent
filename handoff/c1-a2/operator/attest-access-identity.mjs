@@ -18,6 +18,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  realpathSync,
   readFileSync,
   readSync,
   unlinkSync,
@@ -31,6 +32,7 @@ export const ACCESS_AUDIENCE = "24f00c2910e19f99e8a833de7b6c7dc14d18683699985a6d
 export const ACCESS_CERTS_URL = `${ACCESS_ISSUER}/cdn-cgi/access/certs`;
 
 const CLOCK_SKEW_SECONDS = 60;
+export const MAX_ATTESTATION_AGE_SECONDS = 900;
 const MAX_TOKEN_BYTES = 8192;
 const MAX_CERTS_BYTES = 64 * 1024;
 const MAX_JWKS_KEYS = 16;
@@ -213,8 +215,56 @@ function parseJwks(jwks) {
   return keys;
 }
 
+function validateTimeClaims(payload, nowSeconds) {
+  if (
+    typeof nowSeconds !== "number" ||
+    !Number.isFinite(nowSeconds) ||
+    nowSeconds < 0 ||
+    nowSeconds > MAX_DATE_SECONDS
+  )
+    reject("CLOCK_INVALID");
+  // Future skew never extends expiration or the inclusive freshness window.
+  if (
+    typeof payload.exp !== "number" ||
+    !Number.isFinite(payload.exp) ||
+    payload.exp < 0 ||
+    payload.exp > MAX_DATE_SECONDS
+  ) {
+    reject("TOKEN_EXPIRY_INVALID");
+  }
+  if (payload.exp <= nowSeconds) reject("TOKEN_EXPIRED");
+  if (
+    payload.nbf !== undefined &&
+    (typeof payload.nbf !== "number" ||
+      !Number.isFinite(payload.nbf) ||
+      payload.nbf < 0 ||
+      payload.nbf > MAX_DATE_SECONDS ||
+      payload.nbf > nowSeconds + CLOCK_SKEW_SECONDS ||
+      payload.nbf >= payload.exp)
+  ) {
+    reject("TOKEN_NOT_YET_VALID");
+  }
+  if (
+    typeof payload.iat !== "number" ||
+    !Number.isSafeInteger(payload.iat) ||
+    payload.iat < 0 ||
+    payload.iat > MAX_DATE_SECONDS ||
+    payload.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
+    payload.iat >= payload.exp
+  ) {
+    reject("TOKEN_ISSUED_AT_INVALID");
+  }
+  if (nowSeconds - payload.iat > MAX_ATTESTATION_AGE_SECONDS) reject("TOKEN_STALE");
+}
+
 function validateParsed(parsed, { jwks, nowSeconds, expectedEmailSha256, expectedSubject }) {
-  if (!Number.isSafeInteger(nowSeconds) || nowSeconds < 0) reject("CLOCK_INVALID");
+  if (
+    typeof nowSeconds !== "number" ||
+    !Number.isFinite(nowSeconds) ||
+    nowSeconds < 0 ||
+    nowSeconds > MAX_DATE_SECONDS
+  )
+    reject("CLOCK_INVALID");
   const keys = parseJwks(jwks);
   const signingKey = keys.get(parsed.header.kid);
   if (!signingKey) reject("KID_UNKNOWN");
@@ -242,38 +292,7 @@ function validateParsed(parsed, { jwks, nowSeconds, expectedEmailSha256, expecte
   if (!audiences.includes(ACCESS_AUDIENCE)) reject("AUDIENCE_MISMATCH");
   if (payload.type !== "app") reject("TOKEN_TYPE_REJECTED");
 
-  // Expiration is strict; the 60-second leeway applies only to nbf and iat.
-  if (
-    typeof payload.exp !== "number" ||
-    !Number.isFinite(payload.exp) ||
-    payload.exp < 0 ||
-    payload.exp > MAX_DATE_SECONDS
-  ) {
-    reject("TOKEN_EXPIRY_INVALID");
-  }
-  if (payload.exp <= nowSeconds) reject("TOKEN_EXPIRED");
-  if (
-    payload.nbf !== undefined &&
-    (typeof payload.nbf !== "number" ||
-      !Number.isFinite(payload.nbf) ||
-      payload.nbf < 0 ||
-      payload.nbf > MAX_DATE_SECONDS ||
-      payload.nbf > nowSeconds + CLOCK_SKEW_SECONDS ||
-      payload.nbf >= payload.exp)
-  ) {
-    reject("TOKEN_NOT_YET_VALID");
-  }
-  if (
-    payload.iat !== undefined &&
-    (typeof payload.iat !== "number" ||
-      !Number.isFinite(payload.iat) ||
-      payload.iat < 0 ||
-      payload.iat > MAX_DATE_SECONDS ||
-      payload.iat > nowSeconds + CLOCK_SKEW_SECONDS ||
-      payload.iat >= payload.exp)
-  ) {
-    reject("TOKEN_ISSUED_AT_INVALID");
-  }
+  validateTimeClaims(payload, nowSeconds);
 
   if (typeof payload.email !== "string" || typeof payload.sub !== "string") {
     reject("IDENTITY_FIELDS_MISSING");
@@ -321,14 +340,7 @@ export function validateAccessJwt(token, options = {}) {
   return validateParsed(parseToken(token), options);
 }
 
-// Network wrapper used by the CLI; the only request is a GET to the pinned issuer certs URL.
-export async function verifyAccessJwt(token, options = {}) {
-  const parsed = parseToken(token);
-  const jwks =
-    options.jwks === undefined
-      ? await fetchAccessJwks(options.fetchImpl ?? globalThis.fetch)
-      : options.jwks;
-  const clock = options.now ?? Date.now;
+function clockSeconds(clock) {
   if (typeof clock !== "function") reject("CLOCK_INVALID");
   let nowMilliseconds;
   try {
@@ -343,9 +355,40 @@ export async function verifyAccessJwt(token, options = {}) {
   ) {
     reject("CLOCK_INVALID");
   }
+  const seconds = nowMilliseconds / 1000;
+  if (seconds > MAX_DATE_SECONDS) reject("CLOCK_INVALID");
+  return seconds;
+}
+
+// Timing only: the runner must first verify the same immutable JWT's signature and identity.
+export function assertAccessJwtTimeBounds(token, { now = Date.now } = {}) {
+  validateTimeClaims(parseToken(token).payload, clockSeconds(now));
+}
+
+// Timing only. The caller must already have verified this same immutable JWT.
+// This does not check the signature, issuer, audience, subject, or email.
+// remainingFreshness = iat + 900 - now
+// remainingExpiration = exp - now
+// effectiveRemaining = min(remainingFreshness, remainingExpiration)
+export function accessJwtEffectiveRemainingSeconds(token, { now = Date.now } = {}) {
+  const payload = parseToken(token).payload;
+  const nowSeconds = clockSeconds(now);
+  validateTimeClaims(payload, nowSeconds);
+  const remainingFreshness = payload.iat + MAX_ATTESTATION_AGE_SECONDS - nowSeconds;
+  const remainingExpiration = payload.exp - nowSeconds;
+  return Math.min(remainingFreshness, remainingExpiration);
+}
+
+// Network wrapper used by the CLI; the only request is a GET to the pinned issuer certs URL.
+export async function verifyAccessJwt(token, options = {}) {
+  const parsed = parseToken(token);
+  const jwks =
+    options.jwks === undefined
+      ? await fetchAccessJwks(options.fetchImpl ?? globalThis.fetch)
+      : options.jwks;
   return validateParsed(parsed, {
     jwks,
-    nowSeconds: Math.floor(nowMilliseconds / 1000),
+    nowSeconds: clockSeconds(options.now ?? Date.now),
     expectedEmailSha256: options.expectedEmailSha256,
     expectedSubject: options.expectedSubject,
   });
@@ -747,7 +790,7 @@ async function main() {
     do {
       attestationRef = `c1att-${randomBytes(16).toString("hex")}`;
     } while (attestationRef === identity.subject);
-    const verifiedAt = new Date().toISOString();
+    const verifiedAt = new Date(Date.now()).toISOString();
     const record = {
       issuer: identity.issuer,
       subject: identity.subject,
@@ -780,7 +823,17 @@ async function main() {
   }
 }
 
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  const entry = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(entry);
+  } catch {
+    return resolve(process.argv[1]) === entry;
+  }
+}
+
+const isMain = isDirectExecution();
 if (isMain) {
   main()
     .then((exitCode) => {

@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
+import fs from "node:fs";
 import { join, parse, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const IMPLEMENTATION_SHA_RE = /^[0-9a-f]{40}$/;
+const UNSUPPORTED_OPEN_CODES = new Set(["EINVAL", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"]);
+const UNSAFE_WRITE_BITS = 0o022n;
 const OUTER_MANIFEST_PATH = "BUNDLE_SHA256SUMS";
 const OPERATOR_MANIFEST_PATH = "operator/SHA256SUMS";
 const PRIVATE_DIR_PATH = "operator/private";
@@ -36,6 +38,81 @@ function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function isUnsupportedPrimitiveError(error) {
+  return UNSUPPORTED_OPEN_CODES.has(error?.code);
+}
+
+function assertSecureOpenSupported() {
+  const constants = fs.constants;
+  if (
+    !constants ||
+    !Number.isInteger(constants.O_RDONLY) ||
+    !Number.isInteger(constants.O_NOFOLLOW) ||
+    constants.O_NOFOLLOW <= 0 ||
+    !Number.isInteger(constants.O_NONBLOCK) ||
+    constants.O_NONBLOCK <= 0 ||
+    typeof fs.lstatSync !== "function" ||
+    typeof fs.openSync !== "function" ||
+    typeof fs.fstatSync !== "function" ||
+    typeof fs.readFileSync !== "function" ||
+    typeof fs.closeSync !== "function" ||
+    typeof fs.readdirSync !== "function"
+  ) {
+    fail("BUNDLE_SAFE_OPEN_UNSUPPORTED");
+  }
+}
+
+function assertBigIntStat(stat) {
+  for (const value of [
+    stat?.dev,
+    stat?.ino,
+    stat?.uid,
+    stat?.gid,
+    stat?.mode,
+    stat?.size,
+    stat?.mtimeNs,
+    stat?.ctimeNs,
+  ]) {
+    if (typeof value !== "bigint") fail("BUNDLE_SAFE_OPEN_UNSUPPORTED");
+  }
+}
+
+function statSnapshot(stat, includeMetadata = true, enforcePermissions = true) {
+  assertBigIntStat(stat);
+  return Object.freeze({
+    dev: stat.dev,
+    ino: stat.ino,
+    uid: stat.uid,
+    gid: stat.gid,
+    mode: stat.mode,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+    ctimeNs: stat.ctimeNs,
+    includeMetadata,
+    enforcePermissions,
+  });
+}
+
+function snapshotMatches(snapshot, stat) {
+  assertBigIntStat(stat);
+  return (
+    snapshot.dev === stat.dev &&
+    snapshot.ino === stat.ino &&
+    snapshot.uid === stat.uid &&
+    snapshot.gid === stat.gid &&
+    snapshot.mode === stat.mode &&
+    (!snapshot.includeMetadata ||
+      (snapshot.size === stat.size &&
+        snapshot.mtimeNs === stat.mtimeNs &&
+        snapshot.ctimeNs === stat.ctimeNs))
+  );
+}
+
+function assertSafeMode(stat) {
+  assertBigIntStat(stat);
+  if ((stat.mode & UNSAFE_WRITE_BITS) !== 0n) fail("BUNDLE_PATH_UNSAFE_MODE");
+}
+
 function validateOptions(options) {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     fail("INTEGRITY_INPUT_INVALID");
@@ -61,11 +138,50 @@ function validateOptions(options) {
 }
 
 function lstatOrFail(path, missingCode) {
+  let stat;
   try {
-    return lstatSync(path);
-  } catch {
+    stat = fs.lstatSync(path, { bigint: true });
+  } catch (error) {
+    if (isUnsupportedPrimitiveError(error)) fail("BUNDLE_SAFE_OPEN_UNSUPPORTED");
+    if (error?.code === "EACCES" || error?.code === "EPERM") fail("BUNDLE_READ_FAILED");
     fail(missingCode);
   }
+  assertBigIntStat(stat);
+  return stat;
+}
+
+function lstatForValidation(path, errorCode) {
+  let stat;
+  try {
+    stat = fs.lstatSync(path, { bigint: true });
+  } catch (error) {
+    if (isUnsupportedPrimitiveError(error)) fail("BUNDLE_SAFE_OPEN_UNSUPPORTED");
+    fail(errorCode);
+  }
+  assertBigIntStat(stat);
+  return stat;
+}
+
+function assertDirectorySnapshot(entry) {
+  const stat = lstatForValidation(entry.path, "BUNDLE_PATH_CHANGED");
+  if (stat.isSymbolicLink()) fail("BUNDLE_PATH_SYMLINK");
+  if (!stat.isDirectory()) fail("BUNDLE_PATH_CHANGED");
+  if (entry.snapshot.enforcePermissions) assertSafeMode(stat);
+  if (!snapshotMatches(entry.snapshot, stat)) fail("BUNDLE_PATH_CHANGED");
+}
+
+function assertDirectorySnapshots(entries) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    assertDirectorySnapshot(entries[index]);
+  }
+}
+
+function assertFilePathSnapshot(path, expectedSnapshot) {
+  const stat = lstatForValidation(path, "BUNDLE_FILE_CHANGED");
+  if (stat.isSymbolicLink()) fail("BUNDLE_PATH_SYMLINK");
+  if (!stat.isFile()) fail("BUNDLE_FILE_NOT_REGULAR");
+  assertSafeMode(stat);
+  if (!snapshotMatches(expectedSnapshot, stat)) fail("BUNDLE_FILE_CHANGED");
 }
 
 function resolveBundleDir(bundleDir) {
@@ -78,18 +194,31 @@ function resolveBundleDir(bundleDir) {
 
   const { root } = parse(absolute);
   let current = root;
+  const directories = [];
   const rootStat = lstatOrFail(current, "BUNDLE_PATH_INVALID");
   if (rootStat.isSymbolicLink()) fail("BUNDLE_PATH_SYMLINK");
   if (!rootStat.isDirectory()) fail("BUNDLE_PATH_INVALID");
+  const isBundleRoot = current === absolute;
+  if (isBundleRoot) assertSafeMode(rootStat);
+  directories.push({
+    path: current,
+    snapshot: statSnapshot(rootStat, isBundleRoot, isBundleRoot),
+  });
 
   for (const segment of absolute.slice(root.length).split(sep).filter(Boolean)) {
     current = join(current, segment);
     const stat = lstatOrFail(current, "BUNDLE_PATH_INVALID");
     if (stat.isSymbolicLink()) fail("BUNDLE_PATH_SYMLINK");
     if (!stat.isDirectory()) fail("BUNDLE_PATH_INVALID");
+    const isTarget = current === absolute;
+    if (isTarget) assertSafeMode(stat);
+    directories.push({
+      path: current,
+      snapshot: statSnapshot(stat, isTarget, isTarget),
+    });
   }
 
-  return absolute;
+  return { path: absolute, directories };
 }
 
 function validateRelativePath(path) {
@@ -116,28 +245,123 @@ function isPrivatePath(path) {
   return path === PRIVATE_DIR_PATH || path.startsWith(`${PRIVATE_DIR_PATH}/`);
 }
 
-function pathStat(root, relativePath, missingCode) {
+// O_NOFOLLOW protects only the leaf; Node cannot pin every ancestor descriptor.
+// Require a trusted POSIX filesystem with owner control over the whole bundle path.
+function pathStat(root, relativePath, missingCode, rootDirectories) {
   const segments = validateRelativePath(relativePath);
+  assertDirectorySnapshots(rootDirectories);
   let current = root;
-  let stat;
+  const directories = [...rootDirectories];
 
   for (let index = 0; index < segments.length; index += 1) {
     current = join(current, segments[index]);
-    stat = lstatOrFail(current, missingCode);
+    const stat = lstatOrFail(current, missingCode);
     if (stat.isSymbolicLink()) fail("BUNDLE_PATH_SYMLINK");
-    if (index < segments.length - 1 && !stat.isDirectory()) fail("BUNDLE_PATH_INVALID");
-  }
+    if (index < segments.length - 1) {
+      if (!stat.isDirectory()) fail("BUNDLE_PATH_INVALID");
+      assertSafeMode(stat);
+      directories.push({
+        path: current,
+        snapshot: statSnapshot(stat, true, true),
+      });
+      continue;
+    }
 
-  return { path: current, stat };
+    if (!stat.isFile()) fail("BUNDLE_FILE_NOT_REGULAR");
+    assertSafeMode(stat);
+    return {
+      path: current,
+      snapshot: statSnapshot(stat, true, true),
+      directories,
+    };
+  }
 }
 
-function readRegularFile(root, relativePath, missingCode = "BUNDLE_FILE_MISSING") {
-  const { path, stat } = pathStat(root, relativePath, missingCode);
-  if (!stat.isFile()) fail("BUNDLE_FILE_NOT_REGULAR");
+function secureOpenFlags() {
+  assertSecureOpenSupported();
+  return fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
+}
+
+function openRegularFile(path, flags) {
+  try {
+    return fs.openSync(path, flags);
+  } catch (error) {
+    if (error?.code === "ELOOP") fail("BUNDLE_PATH_SYMLINK");
+    if (isUnsupportedPrimitiveError(error)) fail("BUNDLE_SAFE_OPEN_UNSUPPORTED");
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") fail("BUNDLE_PATH_CHANGED");
+    fail("BUNDLE_READ_FAILED");
+  }
+}
+
+function descriptorStatOrFail(descriptor) {
+  let stat;
+  try {
+    stat = fs.fstatSync(descriptor, { bigint: true });
+  } catch (error) {
+    if (isUnsupportedPrimitiveError(error)) fail("BUNDLE_SAFE_OPEN_UNSUPPORTED");
+    fail("BUNDLE_READ_FAILED");
+  }
+  assertBigIntStat(stat);
+  return stat;
+}
+
+function integrityErrorForRead(error) {
+  if (error instanceof BundleIntegrityError) return error;
+  if (isUnsupportedPrimitiveError(error))
+    return new BundleIntegrityError("BUNDLE_SAFE_OPEN_UNSUPPORTED");
+  return new BundleIntegrityError("BUNDLE_READ_FAILED");
+}
+
+function readRegularFile(
+  root,
+  relativePath,
+  missingCode = "BUNDLE_FILE_MISSING",
+  rootDirectories = [],
+) {
+  const flags = secureOpenFlags();
+  const inspected = pathStat(root, relativePath, missingCode, rootDirectories);
+  let descriptor;
+  let bytes;
+  let failure;
 
   try {
-    return readFileSync(path);
-  } catch {
+    descriptor = openRegularFile(inspected.path, flags);
+    const openedStat = descriptorStatOrFail(descriptor);
+    if (!openedStat.isFile()) fail("BUNDLE_FILE_NOT_REGULAR");
+    const openedSnapshot = statSnapshot(openedStat);
+    if (!snapshotMatches(inspected.snapshot, openedStat)) fail("BUNDLE_FILE_CHANGED");
+    assertFilePathSnapshot(inspected.path, inspected.snapshot);
+    assertDirectorySnapshots(inspected.directories);
+
+    bytes = fs.readFileSync(descriptor);
+    if (!Buffer.isBuffer(bytes)) fail("BUNDLE_READ_FAILED");
+
+    const afterReadStat = descriptorStatOrFail(descriptor);
+    if (!afterReadStat.isFile()) fail("BUNDLE_FILE_NOT_REGULAR");
+    if (!snapshotMatches(openedSnapshot, afterReadStat)) fail("BUNDLE_FILE_CHANGED");
+    assertFilePathSnapshot(inspected.path, inspected.snapshot);
+    assertDirectorySnapshots(inspected.directories);
+  } catch (error) {
+    failure = integrityErrorForRead(error);
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor);
+      } catch {
+        failure = new BundleIntegrityError("BUNDLE_DESCRIPTOR_CLOSE_FAILED");
+      }
+    }
+  }
+
+  if (failure) throw failure;
+  return bytes;
+}
+
+function readDirectoryEntries(path) {
+  try {
+    return fs.readdirSync(path).sort();
+  } catch (error) {
+    if (isUnsupportedPrimitiveError(error)) fail("BUNDLE_SAFE_OPEN_UNSUPPORTED");
     fail("BUNDLE_READ_FAILED");
   }
 }
@@ -146,40 +370,43 @@ function validatePrivateTree(path) {
   const stat = lstatOrFail(path, "BUNDLE_READ_FAILED");
   if (stat.isSymbolicLink()) fail("BUNDLE_PATH_SYMLINK");
   if (!stat.isDirectory()) fail("PRIVATE_DIRECTORY_INVALID");
+  assertSafeMode(stat);
 
-  let names;
-  try {
-    names = readdirSync(path);
-  } catch {
-    fail("BUNDLE_READ_FAILED");
-  }
+  const snapshot = statSnapshot(stat, true, true);
+  const names = readDirectoryEntries(path);
+  assertDirectorySnapshot({ path, snapshot });
 
   for (const name of names) {
     const childPath = join(path, name);
     const childStat = lstatOrFail(childPath, "BUNDLE_READ_FAILED");
     if (childStat.isSymbolicLink()) fail("BUNDLE_PATH_SYMLINK");
-    if (childStat.isDirectory()) validatePrivateTree(childPath);
-    else if (!childStat.isFile()) fail("BUNDLE_FILE_NOT_REGULAR");
+    if (childStat.isDirectory()) {
+      assertSafeMode(childStat);
+      validatePrivateTree(childPath);
+    } else if (childStat.isFile()) {
+      assertSafeMode(childStat);
+    } else {
+      fail("BUNDLE_FILE_NOT_REGULAR");
+    }
   }
 }
 
-function discoverPublicFiles(bundleDir) {
+function discoverPublicFiles(bundleDir, rootDirectories) {
   const files = [];
 
   function visit(relativeDirectory) {
     const directoryPath = relativeDirectory
       ? join(bundleDir, ...relativeDirectory.split("/"))
       : bundleDir;
+    assertDirectorySnapshots(rootDirectories);
     const directoryStat = lstatOrFail(directoryPath, "BUNDLE_PATH_INVALID");
     if (directoryStat.isSymbolicLink()) fail("BUNDLE_PATH_SYMLINK");
     if (!directoryStat.isDirectory()) fail("BUNDLE_PATH_INVALID");
+    assertSafeMode(directoryStat);
+    const snapshot = statSnapshot(directoryStat, true, true);
 
-    let names;
-    try {
-      names = readdirSync(directoryPath).sort();
-    } catch {
-      fail("BUNDLE_READ_FAILED");
-    }
+    const names = readDirectoryEntries(directoryPath);
+    assertDirectorySnapshot({ path: directoryPath, snapshot });
 
     for (const name of names) {
       const relativePath = relativeDirectory ? `${relativeDirectory}/${name}` : name;
@@ -191,8 +418,10 @@ function discoverPublicFiles(bundleDir) {
       if (relativePath === PRIVATE_DIR_PATH) {
         validatePrivateTree(path);
       } else if (stat.isDirectory()) {
+        assertSafeMode(stat);
         visit(relativePath);
       } else if (stat.isFile()) {
+        assertSafeMode(stat);
         files.push(relativePath);
       } else {
         fail("BUNDLE_FILE_NOT_REGULAR");
@@ -201,6 +430,7 @@ function discoverPublicFiles(bundleDir) {
   }
 
   visit("");
+  assertDirectorySnapshots(rootDirectories);
   return files.sort();
 }
 
@@ -246,17 +476,19 @@ function assertExactCoverage(entries, publicFiles, expectedFiles) {
   }
 }
 
-function verifyEntries(bundleDir, entries) {
+function verifyEntries(bundleDir, entries, rootDirectories) {
   for (const [path, expectedDigest] of entries) {
-    const actualDigest = sha256(readRegularFile(bundleDir, path));
+    const actualDigest = sha256(
+      readRegularFile(bundleDir, path, "BUNDLE_FILE_MISSING", rootDirectories),
+    );
     if (actualDigest !== expectedDigest) fail("MANIFEST_HASH_MISMATCH");
   }
 }
 
-function verifyManifestConsistencyAt(bundleDir, outerManifest) {
+function verifyManifestConsistencyAt(bundleDir, outerManifest, rootDirectories) {
   const bundleManifestDigest = sha256(outerManifest);
   const outerEntries = parseManifest(outerManifest, OUTER_MANIFEST_PATH);
-  const publicFiles = discoverPublicFiles(bundleDir);
+  const publicFiles = discoverPublicFiles(bundleDir, rootDirectories);
   const publicFileSet = new Set(publicFiles);
   for (const path of REQUIRED_OPERATOR_PATHS) {
     if (!publicFileSet.has(path)) fail("BUNDLE_REQUIRED_FILE_MISSING");
@@ -264,9 +496,16 @@ function verifyManifestConsistencyAt(bundleDir, outerManifest) {
 
   const outerFiles = publicFiles.filter((path) => path !== OUTER_MANIFEST_PATH);
   assertExactCoverage(outerEntries, publicFiles, outerFiles);
-  verifyEntries(bundleDir, outerEntries);
+  verifyEntries(bundleDir, outerEntries, rootDirectories);
 
-  const operatorManifest = readRegularFile(bundleDir, OPERATOR_MANIFEST_PATH);
+  const operatorManifest = readRegularFile(
+    bundleDir,
+    OPERATOR_MANIFEST_PATH,
+    "BUNDLE_FILE_MISSING",
+    rootDirectories,
+  );
+  if (sha256(operatorManifest) !== outerEntries.get(OPERATOR_MANIFEST_PATH))
+    fail("MANIFEST_HASH_MISMATCH");
   const operatorManifestDigest = sha256(operatorManifest);
   const operatorEntries = parseManifest(operatorManifest, OPERATOR_MANIFEST_PATH);
   const operatorFiles = publicFiles.filter(
@@ -274,7 +513,23 @@ function verifyManifestConsistencyAt(bundleDir, outerManifest) {
   );
   const expectedOperatorFiles = [...operatorFiles, ...OPERATOR_EXTRA_PATHS];
   assertExactCoverage(operatorEntries, publicFiles, expectedOperatorFiles);
-  verifyEntries(bundleDir, operatorEntries);
+  verifyEntries(bundleDir, operatorEntries, rootDirectories);
+
+  const currentOuterManifest = readRegularFile(
+    bundleDir,
+    OUTER_MANIFEST_PATH,
+    "BUNDLE_MANIFEST_MISSING",
+    rootDirectories,
+  );
+  if (!currentOuterManifest.equals(outerManifest)) fail("BUNDLE_FILE_CHANGED");
+  const finalPublicFiles = discoverPublicFiles(bundleDir, rootDirectories);
+  if (
+    finalPublicFiles.length !== publicFiles.length ||
+    finalPublicFiles.some((path, index) => path !== publicFiles[index])
+  ) {
+    fail("BUNDLE_PATH_CHANGED");
+  }
+  assertDirectorySnapshots(rootDirectories);
 
   return Object.freeze({ bundleManifestDigest, operatorManifestDigest });
 }
@@ -282,22 +537,38 @@ function verifyManifestConsistencyAt(bundleDir, outerManifest) {
 // Consistency alone is not approval; authorization callers must pin this digest independently.
 export function verifyManifestConsistency(bundleDir) {
   if (typeof bundleDir !== "string" || bundleDir.length === 0) fail("BUNDLE_PATH_INVALID");
+  assertSecureOpenSupported();
   const resolvedBundleDir = resolveBundleDir(bundleDir);
   const outerManifest = readRegularFile(
-    resolvedBundleDir,
+    resolvedBundleDir.path,
     OUTER_MANIFEST_PATH,
     "BUNDLE_MANIFEST_MISSING",
+    resolvedBundleDir.directories,
   );
-  return verifyManifestConsistencyAt(resolvedBundleDir, outerManifest);
+  return verifyManifestConsistencyAt(
+    resolvedBundleDir.path,
+    outerManifest,
+    resolvedBundleDir.directories,
+  );
 }
 
 export function verifyBundleIntegrity(options = {}) {
   const { bundleDir: requestedBundleDir, trustedManifestDigest } = validateOptions(options);
-  const bundleDir = resolveBundleDir(requestedBundleDir);
+  assertSecureOpenSupported();
+  const resolvedBundleDir = resolveBundleDir(requestedBundleDir);
 
-  const outerManifest = readRegularFile(bundleDir, OUTER_MANIFEST_PATH, "BUNDLE_MANIFEST_MISSING");
+  const outerManifest = readRegularFile(
+    resolvedBundleDir.path,
+    OUTER_MANIFEST_PATH,
+    "BUNDLE_MANIFEST_MISSING",
+    resolvedBundleDir.directories,
+  );
   const bundleManifestDigest = sha256(outerManifest);
   if (bundleManifestDigest !== trustedManifestDigest) fail("TRUSTED_MANIFEST_DIGEST_MISMATCH");
 
-  return verifyManifestConsistencyAt(bundleDir, outerManifest);
+  return verifyManifestConsistencyAt(
+    resolvedBundleDir.path,
+    outerManifest,
+    resolvedBundleDir.directories,
+  );
 }
