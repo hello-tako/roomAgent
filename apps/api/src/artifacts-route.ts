@@ -523,7 +523,12 @@ async function readResponse(
   if (checksum && toHex(new Uint8Array(checksum)) !== result.sha256) {
     return c.json(errorBody(requestId, "INTEGRITY", messageFor("INTEGRITY")), 409);
   }
+  const filename =
+    result.filename && /^[A-Za-z0-9._-]{1,80}$/.test(result.filename)
+      ? result.filename
+      : "artifact";
   c.header("content-type", result.mediaType);
+  c.header("content-disposition", `attachment; filename="${filename}"`);
   c.header("x-artifact-id", result.artifactId ?? "");
   c.header("x-artifact-version", String(result.version ?? ""));
   c.header("x-checksum-sha256", result.sha256);

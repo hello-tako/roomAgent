@@ -10,6 +10,7 @@
   "scripts": {
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "pnpm -r --if-present test",
+    "test:e2e": "pnpm --filter @ai-company/web test:e2e",
     "test:operator": "node --test handoff/c1-a2/operator/*.test.mjs",
     "lint": "eslint .",
     "format": "prettier --check .",

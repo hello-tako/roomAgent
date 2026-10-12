@@ -127,6 +127,18 @@ export function sessionToken(data: Record<string, unknown>): string | null {
   return token;
 }
 
+export function humanActor(data: Record<string, unknown>): boolean {
+  return data.actor_type === "human";
+}
+
+export function humanToken(data: Record<string, unknown>): string | null {
+  const token = data.token;
+  if (typeof token !== "string" || !/^hum_[0-9a-f]{64}$/.test(token)) {
+    return null;
+  }
+  return token;
+}
+
 export function employeeFrom(data: Record<string, unknown>): string | null {
   const employeeId = data.employee_id;
   if (typeof employeeId !== "string" || !isId(employeeId, "emp")) {

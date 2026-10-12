@@ -48,7 +48,15 @@ and per-artifact or artifact shards. No premature sharding is performed here.
 
 ## Next safe step
 
-Stage C source was merged through PR #5 at `3909fada8747ae27ea71daf6da9481a7eb8d9eff` with exact-main CI success; the former open-PR state is obsolete. C1-A2 operator hardening is implemented on `fix/roomagent-c1-a2-security-hardening` and requires Muse review of its own exact commit/manifests, then separate human owner mutation approval. Read [the independent review package](reports/stage-c/C1_A2_INDEPENDENT_REVIEW_PACKAGE.md). No deploy, C1 bootstrap, C2 smoke, retirement or production certification follows from code merge/CI. Current live runtime state must be re-observed separately; Muse/CUE product adapters remain unimplemented.
+The paragraph below is the 2026-10-10 plan note. Pull request 5 and the C1-A2 branch have since merged. Current product work is the following section.
+
+Stage C source was merged through PR #5 at `3909fada8747ae27ea71daf6da9481a7eb8d9eff` with exact-main CI success; the former open-PR state is obsolete. C1-A2 operator hardening was implemented on `fix/roomagent-c1-a2-security-hardening` and later merged as pull request 9 at `11a1cab441462cc6087bae2f903dc2b5f1a49b56`. Read [the independent review package](reports/stage-c/C1_A2_INDEPENDENT_REVIEW_PACKAGE.md). No deploy, C1 bootstrap, C2 smoke, retirement or production certification follows from code merge/CI. Current live runtime state must be re-observed separately; Muse/CUE product adapters remain unimplemented.
+
+## Product MVP
+
+The operator UI, authenticated organization HTTP API, browser agent join, and realtime room client are in scope on `feat/roomagent-product-mvp-v1`. Contracts are in [docs/product/](product/architecture.md). The earlier sentence that this remediation plan does not start a UI described that remediation only. It does not cancel the product milestone.
+
+The milestone still does not deploy, widen role templates, add migration `0016`, or treat a browser adapter as a native Muse or CUE connection. Independent review of the product pull request is required before merge. Live Cloudflare changes need a separate authorization.
 
 ## Safety rules that stay in force
 

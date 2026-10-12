@@ -9,6 +9,9 @@ coverage
 .env.*
 !.env.example
 .hoplite/
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/blob-report/
 __pycache__/
 handoff/c1-a2/operator/private/
 handoff/**/private/

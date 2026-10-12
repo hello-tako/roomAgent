@@ -17,8 +17,46 @@ interface IdentityRow {
 }
 
 export function registerHumanBootstrapRoutes(app: App): void {
+  app.get("/access/organizations", (c) => organizations(c));
   app.post("/orgs/:orgId/human-sessions", (c) => issue(c));
   app.delete("/orgs/:orgId/human-sessions/current", (c) => revoke(c));
+}
+
+async function organizations(c: BootstrapContext): Promise<Response> {
+  const requestId = c.get("requestId");
+  const config = accessConfig(c.env);
+  if (!config) {
+    return c.json(
+      errorBody(requestId, "BOOTSTRAP_NOT_CONFIGURED", "Operator bootstrap is disabled."),
+      503,
+    );
+  }
+  const assertion = c.req.header(ACCESS_HEADER);
+  const identity = assertion ? await verifyAccessJwt(assertion, config) : null;
+  if (!identity) {
+    audit(requestId, "denied", "ACCESS_IDENTITY_INVALID");
+    return c.json(errorBody(requestId, "ACCESS_IDENTITY_INVALID", "Identity was rejected."), 401);
+  }
+  const mapped = await resolveIdentity(c.env, identity.issuer, identity.email, identity.subject);
+  if (!mapped.ok) {
+    audit(requestId, "denied", mapped.reason);
+    return c.json(errorBody(requestId, mapped.reason, "Identity was rejected."), 403);
+  }
+  const rows = await c.env.DB.prepare(
+    `SELECT id, name, status FROM organizations
+     WHERE created_by_user_id = ? AND status = 'active'
+     ORDER BY id ASC
+     LIMIT 20`,
+  )
+    .bind(mapped.row.user_id)
+    .all<{ id: string; name: string; status: string }>();
+  return c.json({
+    organizations: rows.results.map((row) => ({
+      id: row.id,
+      name: row.name,
+      status: row.status,
+    })),
+  });
 }
 
 async function issue(c: BootstrapContext): Promise<Response> {

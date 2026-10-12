@@ -6,7 +6,9 @@ import { registerHumanBootstrapRoutes } from "./human-bootstrap-route";
 import { registerStagingBootstrapRoutes } from "./staging-bootstrap-route";
 import { handleQueue } from "./events/consumer";
 import { resolveHttpPrincipal } from "./http-principal";
+import { registerControlPlaneRoutes } from "./control-plane";
 import { registerWorkflowStartRoutes } from "./workflow-start-route";
+import { applyCors, originDecision, securityHeaders } from "./http-guard";
 
 export { AgentDO } from "@ai-company/agent";
 export { ArtifactDO } from "@ai-company/artifact";
@@ -31,10 +33,30 @@ function requestIdFrom(header: string | undefined): string {
 app.use("*", async (c, next) => {
   const requestId = requestIdFrom(c.req.header("x-request-id"));
   c.set("requestId", requestId);
+  if (c.req.method === "OPTIONS") {
+    return applyCors(c, originDecision(c));
+  }
+  const origin = originDecision(c);
+  if (origin === "reject") {
+    return c.json(
+      {
+        error: {
+          code: "ORIGIN_REJECTED",
+          message: "Origin was rejected.",
+          request_id: requestId,
+        },
+      },
+      403,
+    );
+  }
   await next();
   if (c.res.status !== 101) {
+    securityHeaders(c);
     c.header("cache-control", "no-store");
     c.header("x-request-id", requestId);
+    if (origin === "match") {
+      applyCors(c, origin);
+    }
   }
 });
 
@@ -89,12 +111,12 @@ app.get("/orgs/:orgId/rooms/:roomId/snapshot", async (c) => {
     c.req.header("x-employee-id"),
     "room.read",
   );
-  if (principal.decision !== "ALLOW" || !principal.actorId || principal.actorType !== "employee") {
+  if (principal.decision !== "ALLOW" || !principal.actorId || !principal.actorType) {
     return c.json(
       {
         error: {
-          code: "SESSION_INVALID",
-          message: "Employee session is required.",
+          code: principal.reason === "SESSION_INVALID" ? "SESSION_INVALID" : principal.reason,
+          message: "A valid session is required.",
           request_id: requestId,
         },
       },
@@ -104,7 +126,7 @@ app.get("/orgs/:orgId/rooms/:roomId/snapshot", async (c) => {
   const snapshot = await c.env.ROOM.getByName(`room:${orgId}:${roomId}`).snapshot({
     orgId,
     roomId,
-    actorType: "employee",
+    actorType: principal.actorType,
     actorId: principal.actorId,
   });
   if (snapshot.decision === "DENY") {
@@ -191,8 +213,31 @@ app.post("/orgs/:orgId/join", async (c) => {
   );
 });
 
+app.post("/join", async (c) => {
+  const requestId = c.get("requestId");
+  if (!chargeAnonymousJoin()) {
+    return c.json(
+      {
+        error: { code: "THROTTLED", message: "Join was rejected.", request_id: requestId },
+      },
+      429,
+    );
+  }
+  const code = await joinCodeFromBody(c);
+  if (!code) {
+    return c.json(invalidBody(requestId), 400);
+  }
+  return redeemJoin(c, code);
+});
+
 app.post("/j/:token", async (c) => {
   const requestId = c.get("requestId");
+  if (!chargeAnonymousJoin()) {
+    return c.json(
+      { error: { code: "THROTTLED", message: "Join was rejected.", request_id: requestId } },
+      429,
+    );
+  }
   const token = c.req.param("token");
   if (!/^[0-9a-f]{64}$/.test(token)) {
     return c.json(notFoundBody(requestId, "Join was not found."), 404);
@@ -250,6 +295,7 @@ registerGovernanceRoutes(app);
 registerHumanBootstrapRoutes(app);
 registerWorkflowStartRoutes(app);
 registerStagingBootstrapRoutes(app);
+registerControlPlaneRoutes(app);
 
 app.notFound((c) =>
   c.json(
@@ -303,6 +349,94 @@ function invalidBody(requestId: string) {
       request_id: requestId,
     },
   };
+}
+
+const joinCharges = new Map<string, { started: number; count: number }>();
+
+function chargeAnonymousJoin(): boolean {
+  const now = Date.now();
+  const current = joinCharges.get("join");
+  if (!current || now - current.started >= 10_000) {
+    joinCharges.set("join", { started: now, count: 1 });
+    return true;
+  }
+  if (current.count >= 20) {
+    return false;
+  }
+  current.count += 1;
+  return true;
+}
+
+async function joinCodeFromBody(c: {
+  req: { header: (name: string) => string | undefined; text: () => Promise<string> };
+}): Promise<string | null> {
+  const declared = c.req.header("content-length");
+  if (declared !== undefined && (!/^\d+$/.test(declared) || Number(declared) > 256)) {
+    return null;
+  }
+  let text = "";
+  try {
+    text = await c.req.text();
+  } catch {
+    return null;
+  }
+  if (text.length > 256) {
+    return null;
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  if (Object.keys(record).length !== 1 || typeof record.code !== "string") {
+    return null;
+  }
+  return /^[0-9a-f]{64}$/.test(record.code) ? record.code : null;
+}
+
+async function redeemJoin(
+  c: {
+    env: Env;
+    get: (key: "requestId") => string;
+    json: (body: unknown, status?: number) => Response;
+    header: (name: string, value: string) => void;
+    req: { param: (name: string) => string };
+  },
+  token: string,
+): Promise<Response> {
+  const requestId = c.get("requestId");
+  const join = await c.env.DB.prepare(
+    `SELECT org_id, employee_id FROM join_codes WHERE code_hash = ?`,
+  )
+    .bind(await sha256Hex(token))
+    .first<{ org_id: string; employee_id: string }>();
+  if (!join) {
+    return c.json(notFoundBody(requestId, "Join was not found."), 404);
+  }
+  const result = await c.env.AGENT.getByName(`agent:${join.org_id}:${join.employee_id}`).redeem({
+    orgId: join.org_id,
+    employeeId: join.employee_id,
+    code: token,
+  });
+  if (result.decision === "DENY") {
+    return c.json(
+      { error: { code: result.reason, message: "Join was rejected.", request_id: requestId } },
+      result.reason === "THROTTLED" ? 429 : 403,
+    );
+  }
+  c.header("cache-control", "no-store");
+  return c.json({
+    org_id: join.org_id,
+    employee_id: join.employee_id,
+    session_id: result.sessionId,
+    token: result.token,
+    expires_at: result.expiresAt,
+  });
 }
 
 export default {

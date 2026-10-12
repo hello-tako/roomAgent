@@ -211,6 +211,234 @@ export class OrganizationDO extends DurableObject<OrganizationEnv> {
     return { decision: "ALLOW" as const, reason: "ALLOWED", sessionId: verified.sessionId };
   }
 
+  // Socket revalidation after hello. The raw bearer is not stored on the socket.
+  async humanSessionOpen(command: { orgId: string; sessionId: string; userId: string }) {
+    if (
+      this.boundary(command.orgId) ||
+      !isId(command.sessionId, "ses") ||
+      !isId(command.userId, "usr")
+    ) {
+      return { decision: "DENY" as const, reason: "SESSION_INVALID", userId: null };
+    }
+    const row = await this.env.DB.prepare(
+      `SELECT s.user_id FROM human_sessions s
+       JOIN organizations o ON o.id = s.org_id AND o.status = 'active'
+       LEFT JOIN human_identities i ON i.id = s.identity_id
+       WHERE s.org_id = ? AND s.id = ? AND s.user_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+         AND (s.identity_id IS NULL OR (i.status = 'active' AND i.user_id = s.user_id))`,
+    )
+      .bind(command.orgId, command.sessionId, command.userId, this.now())
+      .first<{ user_id: string }>();
+    return row
+      ? { decision: "ALLOW" as const, reason: "ALLOWED", userId: row.user_id }
+      : { decision: "DENY" as const, reason: "SESSION_INVALID", userId: null };
+  }
+
+  // Self description for the authenticated actor. Callers must pass the session actor.
+  async describeActor(command: ActorCommand): Promise<{
+    decision: "ALLOW" | "DENY";
+    reason: string;
+    owner: boolean;
+    permissions: string[];
+  }> {
+    if (this.boundary(command.orgId) || !(await this.ensureHydrated(command.orgId))) {
+      return { decision: "DENY", reason: "TENANT_BOUNDARY", owner: false, permissions: [] };
+    }
+    if (command.actorType !== "human" && command.actorType !== "employee") {
+      return { decision: "DENY", reason: "TENANT_BOUNDARY", owner: false, permissions: [] };
+    }
+    const snapshot = this.snapshot();
+    const permissions = actorPermissions(snapshot, command.actorType, command.actorId);
+    if (command.actorType === "employee" && !snapshot.employees.has(command.actorId)) {
+      return { decision: "DENY", reason: "TENANT_BOUNDARY", owner: false, permissions: [] };
+    }
+    return {
+      decision: "ALLOW",
+      reason: "ALLOWED",
+      owner: command.actorType === "human" && command.actorId === snapshot.ownerHumanId,
+      permissions: [...(permissions ?? [])].sort(),
+    };
+  }
+
+  // D1 is the employee record. Authority sqlite hydrates once, so a later hire must be adopted.
+  async adoptEmployee(command: SuspendEmployeeCommand): Promise<AuthorityDecision> {
+    const gate = await this.gate(command, "agent.invite");
+    if (gate.decision === "DENY") {
+      return gate;
+    }
+    if (!isId(command.employeeId, "emp")) {
+      return deny("TENANT_BOUNDARY", this.policyVersion());
+    }
+    const row = await this.env.DB.prepare(
+      `SELECT id, status FROM employees WHERE org_id = ? AND id = ?`,
+    )
+      .bind(command.orgId, command.employeeId)
+      .first<{ id: string; status: string }>();
+    if (!row || (row.status !== "active" && row.status !== "suspended")) {
+      return deny("TENANT_BOUNDARY", this.policyVersion());
+    }
+    if (!this.employeeRow(row.id)) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO employees (id, status) VALUES (?, ?)`,
+        row.id,
+        row.status,
+      );
+    }
+    return allow(this.policyVersion());
+  }
+
+  // A role created after hydration is invisible until its D1 row is copied into authority sqlite.
+  async adoptRole(command: ActorCommand & { roleId: string }): Promise<AuthorityDecision> {
+    const gate = await this.gate(command, "organization.policy.manage");
+    if (gate.decision === "DENY") {
+      return gate;
+    }
+    if (!isId(command.roleId, "role")) {
+      return deny("TENANT_BOUNDARY", this.policyVersion());
+    }
+    const role = await this.env.DB.prepare(
+      `SELECT id, code FROM roles WHERE org_id = ? AND id = ? AND system_role = 0`,
+    )
+      .bind(command.orgId, command.roleId)
+      .first<{ id: string; code: string }>();
+    if (!role) {
+      return deny("TENANT_BOUNDARY", this.policyVersion());
+    }
+    const permissions = await this.env.DB.prepare(
+      `SELECT permission_code FROM role_permissions WHERE org_id = ? AND role_id = ?`,
+    )
+      .bind(command.orgId, role.id)
+      .all<{ permission_code: string }>();
+    this.ctx.storage.transactionSync(() => {
+      if (!this.roleRow(role.id)) {
+        this.ctx.storage.sql.exec(`INSERT INTO roles (id, code) VALUES (?, ?)`, role.id, role.code);
+      }
+      for (const permission of permissions.results) {
+        this.ctx.storage.sql.exec(
+          `INSERT OR IGNORE INTO role_permissions (role_id, permission_code) VALUES (?, ?)`,
+          role.id,
+          permission.permission_code,
+        );
+      }
+    });
+    return allow(this.policyVersion());
+  }
+
+  async chargeControlPlane(command: {
+    orgId: string;
+    actorId: string;
+  }): Promise<{ decision: "ALLOW" | "DENY"; reason: string }> {
+    if (this.boundary(command.orgId) || command.actorId.length < 4 || command.actorId.length > 80) {
+      return { decision: "DENY", reason: "TENANT_BOUNDARY" };
+    }
+    const now = Date.now();
+    const windowMs = 10_000;
+    const limit = 40;
+    const row = this.ctx.storage.sql
+      .exec<{ window_started_at: number; count: number }>(
+        `SELECT window_started_at, count FROM control_rates WHERE actor_id = ?`,
+        command.actorId,
+      )
+      .toArray()[0];
+    if (!row || now - row.window_started_at >= windowMs) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO control_rates (actor_id, window_started_at, count) VALUES (?, ?, 1)
+         ON CONFLICT(actor_id) DO UPDATE SET window_started_at = excluded.window_started_at, count = 1`,
+        command.actorId,
+        now,
+      );
+      return { decision: "ALLOW", reason: "ALLOWED" };
+    }
+    if (row.count >= limit) {
+      return { decision: "DENY", reason: "THROTTLED" };
+    }
+    this.ctx.storage.sql.exec(
+      `UPDATE control_rates SET count = count + 1 WHERE actor_id = ?`,
+      command.actorId,
+    );
+    return { decision: "ALLOW", reason: "ALLOWED" };
+  }
+
+  async claimControlReplay(command: {
+    orgId: string;
+    actorId: string;
+    key: string;
+    scope: string;
+  }): Promise<{ state: "new" | "replay" | "conflict" | "pending"; body: string | null }> {
+    if (
+      this.boundary(command.orgId) ||
+      !/^[A-Za-z0-9_-]{8,80}$/.test(command.key) ||
+      command.scope.length < 1 ||
+      command.scope.length > 160 ||
+      command.actorId.length < 4 ||
+      command.actorId.length > 80
+    ) {
+      return { state: "conflict", body: null };
+    }
+    const row = this.ctx.storage.sql
+      .exec<{ scope: string; state: string; body: string | null }>(
+        `SELECT scope, state, body FROM control_replays WHERE actor_id = ? AND idempotency_key = ?`,
+        command.actorId,
+        command.key,
+      )
+      .toArray()[0];
+    if (row) {
+      if (row.scope !== command.scope) {
+        return { state: "conflict", body: null };
+      }
+      if (row.state === "stored" && typeof row.body === "string") {
+        return { state: "replay", body: row.body };
+      }
+      return { state: "pending", body: null };
+    }
+    this.ctx.storage.sql.exec(
+      `INSERT INTO control_replays (actor_id, idempotency_key, scope, state, body)
+       VALUES (?, ?, ?, 'pending', NULL)`,
+      command.actorId,
+      command.key,
+      command.scope,
+    );
+    return { state: "new", body: null };
+  }
+
+  async finishControlReplay(command: {
+    orgId: string;
+    actorId: string;
+    key: string;
+    scope: string;
+    body: string;
+  }): Promise<{ stored: boolean }> {
+    if (this.boundary(command.orgId) || command.body.length > 16_384) {
+      return { stored: false };
+    }
+    this.ctx.storage.sql.exec(
+      `UPDATE control_replays SET state = 'stored', body = ?
+       WHERE actor_id = ? AND idempotency_key = ? AND scope = ? AND state = 'pending'`,
+      command.body,
+      command.actorId,
+      command.key,
+      command.scope,
+    );
+    return { stored: true };
+  }
+
+  async abortControlReplay(command: {
+    orgId: string;
+    actorId: string;
+    key: string;
+  }): Promise<{ aborted: boolean }> {
+    if (this.boundary(command.orgId)) {
+      return { aborted: false };
+    }
+    this.ctx.storage.sql.exec(
+      `DELETE FROM control_replays
+       WHERE actor_id = ? AND idempotency_key = ? AND state = 'pending'`,
+      command.actorId,
+      command.key,
+    );
+    return { aborted: true };
+  }
+
   private async issueSession(
     actor: ActorCommand,
     ttlSeconds: number,
@@ -897,6 +1125,19 @@ export class OrganizationDO extends DurableObject<OrganizationEnv> {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         window_started_at INTEGER NOT NULL,
         failures INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS control_rates (
+        actor_id TEXT PRIMARY KEY,
+        window_started_at INTEGER NOT NULL,
+        count INTEGER NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS control_replays (
+        actor_id TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        state TEXT NOT NULL,
+        body TEXT,
+        PRIMARY KEY (actor_id, idempotency_key)
       )`,
     ];
     for (const statement of statements) {
