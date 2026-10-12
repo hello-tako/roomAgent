@@ -625,6 +625,28 @@ export class AgentDO extends DurableObject<AgentEnv> {
     });
   }
 
+  // The runtime ends only the session that presented this token.
+  async endOwnSession(command: {
+    orgId: string;
+    employeeId: string;
+    token: string;
+  }): Promise<SessionCheck> {
+    const verified = await this.verify({
+      orgId: command.orgId,
+      employeeId: command.employeeId,
+      token: command.token,
+      scope: "",
+    });
+    if (verified.decision !== "ALLOW" || !verified.sessionId) {
+      return deny(verified.reason);
+    }
+    return this.dropSession({
+      orgId: command.orgId,
+      employeeId: command.employeeId,
+      sessionId: verified.sessionId,
+    });
+  }
+
   async dropSession(command: DropSessionCommand): Promise<SessionCheck> {
     if (!this.same(command.orgId, command.employeeId) || !isId(command.sessionId, "ses")) {
       return deny("TENANT_BOUNDARY");

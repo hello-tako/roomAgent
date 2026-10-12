@@ -1,5 +1,13 @@
 # Status
 
+## Product MVP source
+
+Recorded against protected `main` `11a1cab441462cc6087bae2f903dc2b5f1a49b56` on `hello-tako/roomAgent` (`1410359112`). That commit is the PR #9 merge. The operator web application and its HTTP control plane live on `feat/roomagent-product-mvp-v1`. Product contracts are in [docs/product/architecture.md](docs/product/architecture.md).
+
+This section supersedes earlier "current" wording below where those notes still describe pull request 5 as open, C1-A2 as unmerged, or the absence of a human UI. The historical sections stay as the record of those milestones. They are not rewritten.
+
+No Cloudflare Worker, secret, D1, Access, route, or release pin was changed for this product milestone. `ROOMAGENT_PRODUCT_MVP_V1_PRODUCTION_CERTIFIED` and `ROOMAGENT_PRODUCT_MVP_V1_STAGING_DEPLOYED` are not issued. F3 remains `UNRESOLVED_MEDIUM`. Native Muse and CUE adapters remain unimplemented.
+
 ## Stage C and C1-A2
 
 PR [#5](https://github.com/takovn2/roomAgent/pull/5) was merged on 2026-10-10 UTC. Its independently APPROVED head was `08e379e96c029ac929277622a0933a5db7c9810b`; resulting main `3909fada8747ae27ea71daf6da9481a7eb8d9eff` passed exact-main CI [38093203477](https://github.com/takovn2/roomAgent/actions/runs/38093203477). This approval covers Stage C source, not the subsequent C1-A2 operator hardening.

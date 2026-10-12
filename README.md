@@ -6,9 +6,11 @@ Muse and CUE are replaceable execution runtimes. They are not the employee recor
 
 ## Status
 
-Phase 0 discovery through Phase 10 company POC records are in this repository. The six-agent company test ran locally on browser sessions. Muse and CUE were not contacted.
+Repository: `hello-tako/roomAgent` (`1410359112`). Protected `main` for this product milestone is `11a1cab441462cc6087bae2f903dc2b5f1a49b56`, the PR #9 merge. The operator application, human HTTP control plane, and browser agent client are documented in [docs/product/architecture.md](docs/product/architecture.md). That work is source only. It does not deploy, change Cloudflare, or certify staging.
 
-Historical certification: `AI_COMPANY_OS_POC_PARTIAL`. Baseline `main` for Stage C is `3528f923692b53c80559ba55a7101773e9a8bd1b`. `https://ai.tungjp.store` serves the 2026-10-08 Worker. `https://api-staging.tungjp.store` is the 2026-10-10 staging Worker behind Cloudflare Access. Neither hostname is a production certification or a Muse session. Stage C bootstrap and smoke code is on open pull request 5 (`feat/stage-c-bootstrap-smoke-v1`). Review is blocked until an independent approval of the final head. It is not merged and not deployed. See [docs/reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md](docs/reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md).
+Historical certification remains `AI_COMPANY_OS_POC_PARTIAL`. Phase 0 through Phase 10 records stay in this repository. The six-agent company test ran locally on browser sessions. Muse and CUE were not contacted. Stage C merged through pull request 5; the resulting main was `3909fada8747ae27ea71daf6da9481a7eb8d9eff`. C1-A2 merged through pull request 9. Those earlier statements that called pull request 5 open are historical and are not the current branch state. See [docs/reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md](docs/reports/stage-c/FINAL_STAGE_C_CERTIFICATION.md) and [docs/STATUS.md](docs/STATUS.md).
+
+`https://ai.tungjp.store` serves the 2026-10-08 Worker. `https://api-staging.tungjp.store` is the 2026-10-10 staging Worker behind Cloudflare Access. Neither hostname is a production certification or a Muse session. This product milestone does not change either runtime.
 
 - Current runtime: [docs/reports/current-runtime.md](docs/reports/current-runtime.md)
 - Remediation ledger: [docs/reports/architecture-remediation-v1.md](docs/reports/architecture-remediation-v1.md)
@@ -26,6 +28,7 @@ pnpm format
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm test:e2e
 python3 scripts/test-migrations.py
 python3 scripts/test-staging-bootstrap.py
 ```
@@ -38,6 +41,8 @@ Do not deploy `apps/api/wrangler.jsonc` onto `ai.tungjp.store`. That file would 
 
 ```text
 apps/api                         stateless Worker gateway, queue consumers, and ProductionTaskWorkflow
+apps/web                         operator and agent browser application
+packages/agent-client            provider-neutral room connection and event reducer
 packages/domain                  ids, validation, entity types, task machine, artifact keys, event envelope, workflow cap, adapter port
 packages/policy                  permission catalog, role templates, decision function
 packages/schemas                 command validation

@@ -6,6 +6,8 @@ import type { TaskDO } from "@ai-company/task";
 import {
   employeeFrom,
   envelope,
+  humanActor,
+  humanToken,
   idempotencyKey,
   isKnownClientType,
   isUnavailableClientType,
@@ -95,6 +97,8 @@ interface SocketAttachment {
   authDeadlineAt: number;
   employeeId?: string;
   sessionId?: string;
+  actorType?: "human";
+  userId?: string;
 }
 
 interface AuthenticatedSocketAttachment extends SocketAttachment {
@@ -540,6 +544,11 @@ export class RoomDO extends DurableObject<RoomEnv> {
       await this.hello(ws, parsed.data, parsed.lastSeenSeq);
       return;
     }
+    const human = readHumanAttachment(ws);
+    if (human) {
+      await this.humanCommand(ws, human, parsed.type, parsed.data);
+      return;
+    }
     const attachment = readAttachment(ws);
     if (!attachment) {
       this.send(ws, this.errorEnvelope("NOT_READY", "Session hello is required."));
@@ -619,6 +628,14 @@ export class RoomDO extends DurableObject<RoomEnv> {
     const bound = this.bound();
     if (!bound || !(await this.roomExists(bound))) {
       this.send(ws, this.errorEnvelope("TENANT_BOUNDARY", "Room was not found."));
+      return;
+    }
+    if (data.actor_type !== undefined && data.actor_type !== "employee" && !humanActor(data)) {
+      this.send(ws, this.errorEnvelope("INVALID_INPUT", "Session was rejected."));
+      return;
+    }
+    if (humanActor(data)) {
+      await this.helloHuman(ws, data, lastSeenSeq);
       return;
     }
     const employeeId = employeeFrom(data);
@@ -701,6 +718,130 @@ export class RoomDO extends DurableObject<RoomEnv> {
         replayed: events.length,
       }),
     );
+  }
+
+  private async helloHuman(
+    ws: WebSocket,
+    data: Record<string, unknown>,
+    lastSeenSeq: number | null,
+  ): Promise<void> {
+    const bound = this.bound();
+    if (!bound || !(await this.roomExists(bound))) {
+      this.send(ws, this.errorEnvelope("TENANT_BOUNDARY", "Room was not found."));
+      return;
+    }
+    const token = humanToken(data);
+    if (!token) {
+      this.send(ws, this.errorEnvelope("SESSION_INVALID", "Session was rejected."));
+      return;
+    }
+    const checked = await this.env.ORGANIZATION.getByName(`org:${bound.orgId}`).verifyHumanSession({
+      orgId: bound.orgId,
+      token,
+    });
+    if (checked.decision !== "ALLOW" || !checked.userId || !checked.sessionId) {
+      this.send(ws, this.errorEnvelope("SESSION_INVALID", "Session was rejected."));
+      return;
+    }
+    const actor: ActorCommand = {
+      orgId: bound.orgId,
+      roomId: bound.roomId,
+      actorType: "human",
+      actorId: checked.userId,
+    };
+    const opened = await this.open(actor, "room.read");
+    if (opened.decision === "DENY") {
+      this.send(ws, this.errorEnvelope(opened.reason, "Session was rejected."));
+      return;
+    }
+    if (
+      lastSeenSeq === null ||
+      lastSeenSeq > opened.seq ||
+      opened.seq - lastSeenSeq >= MAX_REPLAY
+    ) {
+      const reason =
+        lastSeenSeq === null || lastSeenSeq > opened.seq ? "INVALID_SEQUENCE" : "RESYNC_REQUIRED";
+      const message =
+        reason === "INVALID_SEQUENCE" ? "Sequence is not valid." : "Replay window was exceeded.";
+      this.send(ws, this.errorEnvelope(reason, message));
+      return;
+    }
+    ws.serializeAttachment({
+      authenticated: true,
+      authDeadlineAt: 0,
+      actorType: "human",
+      userId: checked.userId,
+      sessionId: checked.sessionId,
+    } satisfies SocketAttachment);
+    await this.refreshAuthAlarm();
+    const head = this.seq();
+    const events = this.replay(lastSeenSeq) ?? [];
+    for (const event of events) {
+      this.send(ws, event);
+    }
+    this.send(
+      ws,
+      envelope("session.ready", createId("evt"), head, {
+        actor_type: "human",
+        user_id: checked.userId,
+        replayed: events.length,
+      }),
+    );
+  }
+
+  private async humanCommand(
+    ws: WebSocket,
+    human: HumanSocketAttachment,
+    type: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    const bound = this.bound();
+    if (!bound || !(await this.roomExists(bound))) {
+      this.send(ws, this.errorEnvelope("TENANT_BOUNDARY", "Room was not found."));
+      return;
+    }
+    if (type === "presence.update" || clientTaskCommand(type)) {
+      this.send(ws, this.errorEnvelope("NOT_AVAILABLE", "That command is not available."));
+      return;
+    }
+    const live = await this.env.ORGANIZATION.getByName(`org:${bound.orgId}`).humanSessionOpen({
+      orgId: bound.orgId,
+      sessionId: human.sessionId,
+      userId: human.userId,
+    });
+    if (live.decision !== "ALLOW") {
+      this.send(
+        ws,
+        envelope("session.revoked", createId("evt"), this.seq(), { reason: live.reason }),
+      );
+      ws.close(4001, "session.revoked");
+      return;
+    }
+    if (type !== "message.send") {
+      this.send(ws, this.errorEnvelope("UNKNOWN_TYPE", "Message type is not supported."));
+      return;
+    }
+    const body = messageBody(data.body);
+    const key = idempotencyKey(data.idempotency_key);
+    if (!body || !key) {
+      this.send(ws, this.errorEnvelope("INVALID_INPUT", "Message is not valid."));
+      return;
+    }
+    const result = await this.postMessage({
+      orgId: bound.orgId,
+      roomId: bound.roomId,
+      actorType: "human",
+      actorId: human.userId,
+      body,
+      idempotencyKey: key,
+    });
+    if (result.decision === "DENY" || !result.event) {
+      this.send(ws, this.errorEnvelope(result.reason, "Message was rejected."));
+      return;
+    }
+    if (result.duplicate) {
+      this.send(ws, result.event);
+    }
   }
 
   private async requireLive(
@@ -1205,7 +1346,11 @@ export class RoomDO extends DurableObject<RoomEnv> {
   private broadcast(event: RoomEnvelope, except?: WebSocket): void {
     const text = JSON.stringify(event);
     for (const socket of this.ctx.getWebSockets()) {
-      if (socket === except || socket.readyState !== WebSocket.OPEN || !readAttachment(socket)) {
+      if (
+        socket === except ||
+        socket.readyState !== WebSocket.OPEN ||
+        (!readAttachment(socket) && !readHumanAttachment(socket))
+      ) {
         continue;
       }
       socket.send(text);
@@ -1284,6 +1429,36 @@ function readSocketAttachment(ws: WebSocket): SocketAttachment | null {
     authDeadlineAt: record.authDeadlineAt,
     ...(typeof record.employeeId === "string" ? { employeeId: record.employeeId } : {}),
     ...(typeof record.sessionId === "string" ? { sessionId: record.sessionId } : {}),
+    ...(record.actorType === "human" ? { actorType: "human" as const } : {}),
+    ...(typeof record.userId === "string" ? { userId: record.userId } : {}),
+  };
+}
+
+interface HumanSocketAttachment {
+  authenticated: true;
+  authDeadlineAt: number;
+  actorType: "human";
+  userId: string;
+  sessionId: string;
+}
+
+function readHumanAttachment(ws: WebSocket): HumanSocketAttachment | null {
+  const attachment = readSocketAttachment(ws);
+  if (!attachment?.authenticated || attachment.actorType !== "human") {
+    return null;
+  }
+  if (typeof attachment.userId !== "string" || !isId(attachment.userId, "usr")) {
+    return null;
+  }
+  if (typeof attachment.sessionId !== "string" || !isId(attachment.sessionId, "ses")) {
+    return null;
+  }
+  return {
+    authenticated: true,
+    authDeadlineAt: attachment.authDeadlineAt,
+    actorType: "human",
+    userId: attachment.userId,
+    sessionId: attachment.sessionId,
   };
 }
 

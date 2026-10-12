@@ -1,0 +1,39 @@
+{
+  "repository": "hello-tako/roomAgent",
+  "repository_id": 1410359112,
+  "branch": "feat/roomagent-product-mvp-v1",
+  "base_commit": "11a1cab441462cc6087bae2f903dc2b5f1a49b56",
+  "checkpoint_commit": null,
+  "checkpoint_commit_note": "Recorded in the draft PR body after commit. Omitted here to avoid hashing the SHA into the commit that creates it.",
+  "milestone": "ROOMAGENT_PRODUCT_MVP_V1_P11_P16",
+  "pause_status": "WIP_CHECKPOINT",
+  "development_freeze": "DEVELOPMENT_FREEZE_COMPLETE",
+  "cloudflare_mutation": "NONE",
+  "migrations_added": [],
+  "c1_operator_sha256sums": "6609c3e77b3788578ec97016a01f12e9b794290822a402d017b4b88032670fe5",
+  "c1_bundle_sha256sums": "1037cb2f72c2b45c539035a18e24696d80464332c7ad82d1dcc10da5c3df7a7e",
+  "workstreams": {
+    "P11": "PARTIAL",
+    "P12": "PARTIAL",
+    "P13": "PARTIAL",
+    "P14": "PARTIAL",
+    "P15": "PARTIAL",
+    "P16": "PARTIAL"
+  },
+  "handoff_documents": [
+    "docs/handoffs/product-mvp-v1/MASTER_HANDOFF.md",
+    "docs/handoffs/product-mvp-v1/IMPLEMENTATION_LEDGER.md",
+    "docs/handoffs/product-mvp-v1/ARCHITECTURE_AND_API_HANDOFF.md",
+    "docs/handoffs/product-mvp-v1/TEST_AND_CI_EVIDENCE.md",
+    "docs/handoffs/product-mvp-v1/SECURITY_AND_RISK_REGISTER.md",
+    "docs/handoffs/product-mvp-v1/NEXT_AGENT_EXECUTION_PLAN.md",
+    "docs/handoffs/product-mvp-v1/CHECKPOINT_MANIFEST.json"
+  ],
+  "limitations": [
+    "Operator UI screens are not implemented.",
+    "Browser E2E was not written or run.",
+    "Full format, lint, typecheck, and workspace test list was not run.",
+    "GitHub Actions result is unknown until the branch push is read back.",
+    "This checkpoint is not merge-ready and not a review request."
+  ]
+}
