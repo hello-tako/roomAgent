@@ -3,6 +3,8 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { generateKeyPairSync, sign } from "node:crypto";
+import fs from "node:fs";
 import {
   mkdtempSync,
   writeFileSync,
@@ -12,6 +14,8 @@ import {
   chmodSync,
   symlinkSync,
   readdirSync,
+  renameSync,
+  truncateSync,
   rmSync,
   realpathSync,
 } from "node:fs";
@@ -19,6 +23,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readPrivateFile, writePrivateExclusive } from "./runtime-io.mjs";
+import {
+  ACCESS_AUDIENCE,
+  MAX_ATTESTATION_AGE_SECONDS,
+  validateAccessJwt,
+} from "./attest-access-identity.mjs";
 import {
   REAL_CONFIG,
   Redactor,
@@ -45,11 +54,35 @@ const FAKE = {
   email: "operator@example.test",
 };
 const API_TOKEN = "TESTAPITOKEN_abcdefghijklmnopqrstuvwxyz012345";
-const JWT = [
-  Buffer.from(JSON.stringify({ alg: "RS256" })).toString("base64url"),
-  Buffer.from(JSON.stringify({ sub: "test", exp: 9999999999 })).toString("base64url"),
-  Buffer.from("fake-signature").toString("base64url"),
-].join(".");
+const NOW_SECONDS = 1_800_000_000;
+const TOKEN_PAIR = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const TOKEN_JWK = {
+  ...TOKEN_PAIR.publicKey.export({ format: "jwk" }),
+  alg: "RS256",
+  kid: "runner-test-key",
+  use: "sig",
+};
+function signedAccessJwt(overrides = {}) {
+  const header = Buffer.from(
+    JSON.stringify({ alg: "RS256", kid: TOKEN_JWK.kid, typ: "JWT" }),
+  ).toString("base64url");
+  const payload = Buffer.from(
+    JSON.stringify({
+      iss: FAKE.issuer,
+      aud: [ACCESS_AUDIENCE],
+      type: "app",
+      sub: FAKE.subject,
+      email: FAKE.email,
+      iat: NOW_SECONDS - 60,
+      nbf: NOW_SECONDS - 60,
+      exp: NOW_SECONDS + 3600,
+      ...overrides,
+    }),
+  ).toString("base64url");
+  const input = `${header}.${payload}`;
+  return `${input}.${sign("RSA-SHA256", Buffer.from(input), TOKEN_PAIR.privateKey).toString("base64url")}`;
+}
+const JWT = signedAccessJwt();
 const IMPLEMENTATION_SHA = "a".repeat(40);
 const roots = [];
 after(() => {
@@ -152,7 +185,10 @@ function setup(cfg, { approval = true, approvalOverride = null } = {}) {
   roots.push(root);
   const bundle = join(root, "bundle");
   const source = dirname(dirname(fileURLToPath(import.meta.url)));
-  cpSync(source, bundle, { recursive: true, filter: (path) => !path.includes("/private") });
+  cpSync(source, bundle, {
+    recursive: true,
+    filter: (path) => !path.endsWith("/operator/private") && !path.includes("/operator/private/"),
+  });
   const dir = join(bundle, "operator");
   const priv = join(dir, "private");
   require_mkdir(priv);
@@ -309,7 +345,12 @@ function mockWorld(cfg, faults = {}) {
   return { fetch, calls, s };
 }
 
-function deps(cfg, env, world, { confirm = true, tty = true } = {}) {
+function deps(
+  cfg,
+  env,
+  world,
+  { confirm = true, tty = true, now = () => NOW_SECONDS * 1000, accessToken = JWT } = {},
+) {
   const outLines = [];
   const red = new Redactor();
   return {
@@ -336,9 +377,16 @@ function deps(cfg, env, world, { confirm = true, tty = true } = {}) {
               : `BOOTSTRAP ${cfg.approvalRef}`
             : "no",
       fetch: world.fetch,
-      getAccessJwt: async () => JWT,
+      now,
+      getAccessJwt: async () => accessToken,
       attest: async (jwt, outPath) => {
-        assert.equal(jwt, JWT);
+        assert.equal(jwt, accessToken);
+        validateAccessJwt(jwt, {
+          jwks: { keys: [TOKEN_JWK] },
+          nowSeconds: now() / 1000,
+          expectedSubject: FAKE.subject,
+          expectedEmailSha256: sha256hex(FAKE.email),
+        });
         writeFileSync(outPath, JSON.stringify({ ...FAKE, attestationRef: "c1att-fresh" }), {
           mode: 0o600,
         });
@@ -1573,4 +1621,277 @@ for (const stage of ["independent owner", "DEPLOY", "BOOTSTRAP"])
     assert.ok(
       !existsSync(join(env.priv, stage === "DEPLOY" ? "c1-w2-attempted" : "c1-b1-attempted")),
     );
+  });
+
+for (const [label, claims] of [
+  ["cached stale JWT", { iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS - 1 }],
+  ["JWT without issued-at", { iat: undefined }],
+])
+  test(`${label} fails production attestation before health or B1 and is not reacquired`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    const accessToken = signedAccessJwt(claims);
+    const { d, outLines } = deps(cfg, env, w, { accessToken });
+    const counters = instrumentSecrets(d);
+    let error;
+    await assert.rejects(run(["--execute"], d, cfg), (e) => {
+      error = e;
+      return e.code === "FRESH_ATTESTATION_FAILED";
+    });
+    assert.equal(counters.jwt, 1);
+    assert.equal(
+      w.calls.filter((c) => ["/health", "/operator/staging-bootstrap"].includes(c.path)).length,
+      0,
+    );
+    assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+    assertTransportSafe(outLines, error, [accessToken]);
+  });
+
+for (const reason of ["stale", "expired"])
+  test(`token ${reason} during human confirmation blocks B1`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    let nowSeconds = NOW_SECONDS;
+    const accessToken = signedAccessJwt({
+      iat: NOW_SECONDS,
+      exp: NOW_SECONDS + (reason === "expired" ? 600 : 3600),
+    });
+    const { d, outLines } = deps(cfg, env, w, { accessToken, now: () => nowSeconds * 1000 });
+    const counters = instrumentSecrets(d);
+    const prompt = d.prompt;
+    d.prompt = async (label) => {
+      const answer = await prompt(label);
+      if (label.includes("BOOTSTRAP"))
+        nowSeconds += reason === "expired" ? 600 : MAX_ATTESTATION_AGE_SECONDS + 1;
+      return answer;
+    };
+    let error;
+    await assert.rejects(run(["--execute"], d, cfg), (e) => {
+      error = e;
+      return e.code === "FRESH_ATTESTATION_FAILED";
+    });
+    assert.equal(counters.jwt, 1);
+    assert.equal(w.calls.filter((c) => c.path === "/health").length, 1);
+    assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+    assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+    assertTransportSafe(outLines, error, [accessToken]);
+  });
+
+test("B1 accepts the inclusive maximum age after human confirmation", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  let nowSeconds = NOW_SECONDS;
+  const { d } = deps(cfg, env, w, {
+    accessToken: signedAccessJwt({ iat: NOW_SECONDS }),
+    now: () => nowSeconds * 1000,
+  });
+  const prompt = d.prompt;
+  d.prompt = async (label) => {
+    const answer = await prompt(label);
+    if (label.includes("BOOTSTRAP")) nowSeconds += MAX_ATTESTATION_AGE_SECONDS;
+    return answer;
+  };
+  assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
+  assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
+});
+
+for (const reason of ["stale", "expired"])
+  test(`token ${reason} during final network preflights blocks B1 after a successful attestation`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    let nowSeconds = NOW_SECONDS;
+    const accessToken = signedAccessJwt({
+      iat: NOW_SECONDS,
+      exp: NOW_SECONDS + (reason === "expired" ? 600 : 3600),
+    });
+    const { d, outLines } = deps(cfg, env, w, { accessToken, now: () => nowSeconds * 1000 });
+    const attest = d.attest;
+    let attestations = 0;
+    d.attest = async (...args) => {
+      const result = await attest(...args);
+      attestations++;
+      return result;
+    };
+    intercept(d, (_url, _init, res) => {
+      if (attestations === 2)
+        nowSeconds = NOW_SECONDS + (reason === "expired" ? 600 : MAX_ATTESTATION_AGE_SECONDS + 1);
+      return res;
+    });
+    let error;
+    await assert.rejects(run(["--execute"], d, cfg), (e) => {
+      error = e;
+      return e.code === "FRESH_ATTESTATION_FAILED";
+    });
+    assert.equal(attestations, 2);
+    assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+    assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+    assertTransportSafe(outLines, error, [accessToken]);
+  });
+
+test("time passing while the B1 marker is persisted blocks dispatch and retains the marker", async () => {
+  const cfg = testConfig();
+  const env = setup(cfg);
+  const w = mockWorld(cfg);
+  const marker = join(env.priv, "c1-b1-attempted");
+  const accessToken = signedAccessJwt({ iat: NOW_SECONDS });
+  const { d, outLines } = deps(cfg, env, w, {
+    accessToken,
+    now: () => (NOW_SECONDS + (existsSync(marker) ? MAX_ATTESTATION_AGE_SECONDS + 1 : 0)) * 1000,
+  });
+  let error;
+  await assert.rejects(run(["--execute"], d, cfg), (e) => {
+    error = e;
+    return e.code === "FRESH_ATTESTATION_FAILED";
+  });
+  assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+  assert.ok(existsSync(marker));
+  const restartWorld = mockWorld(cfg);
+  const { d: restart } = deps(cfg, env, restartWorld);
+  await assert.rejects(run(["--execute"], restart, cfg), { code: "ALREADY_ATTEMPTED_W1" });
+  assert.equal(restartWorld.calls.length, 0);
+  assertTransportSafe(outLines, error, [accessToken]);
+});
+
+for (const elapsedMilliseconds of [900000, 900001])
+  test(`B1 uses millisecond production clock after ${elapsedMilliseconds}ms confirmation`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    let nowMilliseconds = NOW_SECONDS * 1000;
+    const { d } = deps(cfg, env, w, {
+      accessToken: signedAccessJwt({ iat: NOW_SECONDS }),
+      now: () => nowMilliseconds,
+    });
+    const prompt = d.prompt;
+    d.prompt = async (label) => {
+      const answer = await prompt(label);
+      if (label.includes("BOOTSTRAP")) nowMilliseconds += elapsedMilliseconds;
+      return answer;
+    };
+    if (elapsedMilliseconds === MAX_ATTESTATION_AGE_SECONDS * 1000) {
+      assert.equal((await run(["--execute"], d, cfg)).status, "C1_BOOTSTRAP_VERIFIED");
+      assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 1);
+    } else {
+      await assert.rejects(run(["--execute"], d, cfg), { code: "FRESH_ATTESTATION_FAILED" });
+      assert.equal(w.calls.filter((c) => c.path === "/operator/staging-bootstrap").length, 0);
+      assert.ok(!existsSync(join(env.priv, "c1-b1-attempted")));
+    }
+  });
+
+for (const fault of [
+  "symlink-replacement",
+  "regular-replacement",
+  "device-change",
+  "inode-change",
+  "directory-replacement",
+  "truncation",
+  "unreadable",
+  "unsupported-open",
+  "missing-open-primitive",
+  "descriptor-read",
+  "descriptor-close",
+  "ancestor-replacement",
+])
+  test(`descriptor integrity ${fault} blocks all credentials, network and mutations`, async () => {
+    const cfg = testConfig();
+    const env = setup(cfg);
+    const w = mockWorld(cfg);
+    const { d, outLines } = deps(cfg, env, w);
+    const counters = instrumentSecrets(d);
+    const target =
+      fault === "ancestor-replacement"
+        ? join(env.dir, "c1-runner.mjs")
+        : join(env.bundle, "BUNDLE_SHA256SUMS");
+    const saved = join(env.root, "saved-public-object");
+    const outside = join(env.root, "outside-public-file");
+    const replacementBytes = readFileSync(target);
+    writeFileSync(outside, "outside-public-canary");
+    const originals = Object.fromEntries(
+      ["openSync", "fstatSync", "readFileSync", "closeSync"].map((name) => [name, fs[name]]),
+    );
+    const descriptors = new Set();
+    let injected = false;
+    let injecting = false;
+    let error;
+    const failIo = (code) => {
+      injected = true;
+      const failure = new Error(API_TOKEN + JWT + FAKE.email);
+      failure.code = code;
+      throw failure;
+    };
+    try {
+      fs.openSync =
+        fault === "missing-open-primitive"
+          ? undefined
+          : (path, ...args) => {
+              if (path === target && !injected && !injecting) {
+                if (fault === "unreadable") failIo("EACCES");
+                if (fault === "unsupported-open") failIo("ENOTSUP");
+                if (
+                  ["symlink-replacement", "regular-replacement", "directory-replacement"].includes(
+                    fault,
+                  )
+                ) {
+                  injecting = true;
+                  renameSync(path, saved);
+                  if (fault === "symlink-replacement") symlinkSync(outside, path);
+                  else if (fault === "regular-replacement") writeFileSync(path, replacementBytes);
+                  else mkdirSync(path);
+                  injected = true;
+                  injecting = false;
+                }
+                if (fault === "ancestor-replacement") {
+                  renameSync(env.dir, saved);
+                  symlinkSync(saved, env.dir, "dir");
+                  injected = true;
+                }
+              }
+              const descriptor = originals.openSync(path, ...args);
+              if (path === target) descriptors.add(descriptor);
+              return descriptor;
+            };
+      fs.fstatSync = (descriptor, ...args) => {
+        const stat = originals.fstatSync(descriptor, ...args);
+        if (descriptors.has(descriptor) && ["device-change", "inode-change"].includes(fault)) {
+          injected = true;
+          return {
+            ...stat,
+            dev: stat.dev + (fault === "device-change" ? 1n : 0n),
+            ino: stat.ino + (fault === "inode-change" ? 1n : 0n),
+            isFile: () => stat.isFile(),
+          };
+        }
+        return stat;
+      };
+      fs.readFileSync = (descriptor, ...args) => {
+        if (descriptors.has(descriptor)) {
+          if (fault === "descriptor-read") failIo("EIO");
+          if (fault === "truncation" && !injected) {
+            truncateSync(target, 1);
+            injected = true;
+          }
+        }
+        return originals.readFileSync(descriptor, ...args);
+      };
+      fs.closeSync = (descriptor) => {
+        originals.closeSync(descriptor);
+        if (fault === "descriptor-close" && descriptors.has(descriptor)) failIo("EIO");
+      };
+      await assert.rejects(run(["--execute"], d, cfg), (e) => {
+        error = e;
+        return e.code === "BUNDLE_INTEGRITY_FAILED";
+      });
+    } finally {
+      for (const [name, original] of Object.entries(originals)) fs[name] = original;
+    }
+    assert.ok(injected || fault === "missing-open-primitive");
+    assert.deepEqual(counters, { api: 0, jwt: 0 });
+    assert.equal(w.calls.length, 0);
+    for (const stage of ["w1", "w2", "b1"])
+      assert.ok(!existsSync(join(env.priv, `c1-${stage}-attempted`)));
+    assertTransportSafe(outLines, error);
   });

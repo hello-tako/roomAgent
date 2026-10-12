@@ -20,11 +20,13 @@ import {
   ACCESS_AUDIENCE,
   ACCESS_CERTS_URL,
   ACCESS_ISSUER,
+  MAX_ATTESTATION_AGE_SECONDS,
+  assertAccessJwtTimeBounds,
   validateAccessJwt,
   verifyAccessJwt,
 } from "./attest-access-identity.mjs";
 
-const NOW_SECONDS = Math.floor(Date.now() / 1000);
+const NOW_SECONDS = 1_800_000_000;
 const EMAIL = "owner@example.test";
 const SUBJECT = "private-subject-canary";
 const EMAIL_SHA256 = createHash("sha256").update(EMAIL).digest("hex");
@@ -120,7 +122,7 @@ function response(status, body, options = {}) {
   };
 }
 
-function makeCliFixture(t) {
+function makeCliFixture(t, nowSeconds = NOW_SECONDS) {
   const root = mkdtempSync(join(tmpdir(), "access-attestation-test-"));
   const operatorDir = join(root, "operator");
   const privateDir = join(operatorDir, "private");
@@ -132,6 +134,7 @@ function makeCliFixture(t) {
   writeFileSync(
     preloadPath,
     `import { writeFileSync } from "node:fs";
+Date.now = () => ${nowSeconds * 1000};
 const expectedUrl = ${JSON.stringify(ACCESS_CERTS_URL)};
 const tracePath = ${JSON.stringify(tracePath)};
 const body = ${JSON.stringify(JSON.stringify(JWKS))};
@@ -265,11 +268,8 @@ test("enforces expiration, not-before, issued-at, and the bounded clock skew", a
     ["invalid not-before", { nbf: "later" }, "TOKEN_NOT_YET_VALID"],
     ["not-before beyond skew", { nbf: NOW_SECONDS + 61 }, "TOKEN_NOT_YET_VALID"],
     ["not-before at expiration", { nbf: NOW_SECONDS + 600 }, "TOKEN_NOT_YET_VALID"],
-    ["missing issued-at", { iat: undefined }, "TOKEN_ISSUED_AT_INVALID"],
     ["invalid issued-at", { iat: "later" }, "TOKEN_ISSUED_AT_INVALID"],
-    ["non-integer issued-at", { iat: NOW_SECONDS - 60.5 }, "TOKEN_ISSUED_AT_INVALID"],
     ["issued-at beyond skew", { iat: NOW_SECONDS + 61 }, "TOKEN_ISSUED_AT_INVALID"],
-    ["issued-at older than maximum age", { iat: NOW_SECONDS - 901 }, "TOKEN_ISSUED_AT_INVALID"],
     ["issued-at at expiration", { iat: NOW_SECONDS + 600 }, "TOKEN_ISSUED_AT_INVALID"],
   ];
   for (const [name, claims, code] of cases) {
@@ -281,10 +281,6 @@ test("enforces expiration, not-before, issued-at, and the bounded clock skew", a
     const identity = validate(
       signedToken({ payload: validPayload({ nbf: NOW_SECONDS + 60, iat: NOW_SECONDS + 60 }) }),
     );
-    assert.equal(identity.subject, SUBJECT);
-  });
-  await t.test("accepts issued-at exactly at the maximum age", () => {
-    const identity = validate(signedToken({ payload: validPayload({ iat: NOW_SECONDS - 900 }) }));
     assert.equal(identity.subject, SUBJECT);
   });
 });
@@ -402,24 +398,6 @@ test("fetches only the pinned issuer certs endpoint without transmitting the JWT
     { method: "GET", headers: { accept: "application/json" }, redirect: "error" },
   ]);
   assert.ok(!JSON.stringify(calls[0]).includes(token));
-});
-
-test("rejects stale issued-at claims through asynchronous verification", async () => {
-  const token = signedToken({ payload: validPayload({ iat: NOW_SECONDS - 901 }) });
-  await assert.rejects(
-    verifyAccessJwt(token, {
-      fetchImpl: async () => response(200, JSON.stringify(JWKS)),
-      now: () => NOW_SECONDS * 1000,
-    }),
-    (error) => {
-      assert.equal(error.code, "TOKEN_ISSUED_AT_INVALID");
-      assert.equal(error.message, "TOKEN_ISSUED_AT_INVALID");
-      assert.ok(!error.message.includes(token));
-      assert.ok(!error.message.includes(EMAIL));
-      assert.ok(!error.message.includes(SUBJECT));
-      return true;
-    },
-  );
 });
 
 test("rejects certificate HTTP failures", async (t) => {
@@ -705,29 +683,6 @@ test("CLI sanitizes claim failures and does not leave a private record", (t) => 
   assert.equal(lstatSync(outputPath, { throwIfNoEntry: false }), undefined);
 });
 
-test("CLI rejects stale issued-at claims without revealing identity or writing a record", (t) => {
-  const fixture = makeCliFixture(t);
-  const expectedFile = createExpectedEmailFile(fixture);
-  const outputPath = join(fixture.privateDir, "stale.json");
-  const token = signedToken({ payload: validPayload({ iat: NOW_SECONDS - 901 }) });
-  const result = runCli(
-    fixture,
-    ["--private-out", outputPath, "--expected-email-sha256-file", expectedFile],
-    token,
-  );
-
-  assert.equal(result.status, 2);
-  assert.equal(result.stderr, "");
-  assert.deepEqual(JSON.parse(result.stdout), {
-    identity_attestation_status: "TOKEN_ISSUED_AT_INVALID",
-  });
-  assert.ok(!result.stdout.includes(token));
-  assert.ok(!result.stdout.includes(EMAIL));
-  assert.ok(!result.stdout.includes(SUBJECT));
-  assert.equal(lstatSync(outputPath, { throwIfNoEntry: false }), undefined);
-  assert.ok(lstatSync(fixture.tracePath, { throwIfNoEntry: false }));
-});
-
 test("CLI rejects outside paths, symlinks, and existing files without removing them", (t) => {
   const fixture = makeCliFixture(t);
   const outsidePath = join(fixture.root, "outside.json");
@@ -777,4 +732,246 @@ test("CLI rejects a symlinked private directory", (t) => {
     identity_attestation_status: "PRIVATE_PATH_REJECTED",
   });
   assert.equal(lstatSync(join(target, "record.json"), { throwIfNoEntry: false }), undefined);
+});
+
+test("requires issued-at and enforces the inclusive fixed freshness window", async (t) => {
+  const cases = [
+    ["missing issued-at", { iat: undefined }, "TOKEN_ISSUED_AT_INVALID"],
+    ["null issued-at", { iat: null }, "TOKEN_ISSUED_AT_INVALID"],
+    ["string issued-at", { iat: String(NOW_SECONDS) }, "TOKEN_ISSUED_AT_INVALID"],
+    ["negative issued-at", { iat: -1 }, "TOKEN_ISSUED_AT_INVALID"],
+    ["nonfinite issued-at", { iat: Infinity }, "TOKEN_ISSUED_AT_INVALID"],
+    ["fractional issued-at", { iat: NOW_SECONDS - 60.5 }, "TOKEN_ISSUED_AT_INVALID"],
+    ["out-of-range issued-at", { iat: 8_640_000_000_001 }, "TOKEN_ISSUED_AT_INVALID"],
+    ["below maximum age", { iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS + 1 }, null],
+    ["exact maximum age", { iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS }, null],
+    [
+      "above maximum age with a valid signature",
+      { iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS - 1 },
+      "TOKEN_STALE",
+    ],
+    ["future issued-at inside skew", { iat: NOW_SECONDS + 59 }, null],
+    ["future issued-at at skew", { iat: NOW_SECONDS + 60 }, null],
+    ["future issued-at outside skew", { iat: NOW_SECONDS + 61 }, "TOKEN_ISSUED_AT_INVALID"],
+    ["expiration exceeded", { exp: NOW_SECONDS - 1 }, "TOKEN_EXPIRED"],
+    ["not-before outside skew", { nbf: NOW_SECONDS + 61 }, "TOKEN_NOT_YET_VALID"],
+  ];
+  for (const [name, claims, code] of cases) {
+    await t.test(name, () => {
+      const token = signedToken({ payload: validPayload(claims) });
+      const check = () =>
+        validate(token, { expectedSubject: SUBJECT, expectedEmailSha256: EMAIL_SHA256 });
+      if (code) assertCode(check, code);
+      else assert.equal(check().emailBinding, "MATCHED");
+    });
+  }
+});
+
+test("a fresh issued-at never bypasses signature or identity checks", async (t) => {
+  await t.test("wrong signature", () =>
+    assertCode(
+      () =>
+        validate(
+          signedToken({
+            signer: OTHER_PAIR.privateKey,
+            payload: validPayload({ iat: NOW_SECONDS }),
+          }),
+        ),
+      "SIGNATURE_INVALID",
+    ),
+  );
+  for (const [field, value, code] of [
+    ["sub", "other-subject", "SUBJECT_MISMATCH"],
+    ["email", "other@example.test", "EMAIL_MISMATCH"],
+  ]) {
+    await t.test(`wrong ${field}`, () =>
+      assertCode(
+        () =>
+          validate(signedToken({ payload: validPayload({ iat: NOW_SECONDS, [field]: value }) }), {
+            expectedSubject: SUBJECT,
+            expectedEmailSha256: EMAIL_SHA256,
+          }),
+        code,
+      ),
+    );
+  }
+});
+
+test("verification samples the injected clock after certificate retrieval", async () => {
+  let nowSeconds = NOW_SECONDS;
+  const token = signedToken({
+    payload: validPayload({ iat: NOW_SECONDS, exp: NOW_SECONDS + 3600 }),
+  });
+  validate(token);
+  await assert.rejects(
+    verifyAccessJwt(token, {
+      now: () => nowSeconds * 1000,
+      fetchImpl: async () => {
+        nowSeconds += MAX_ATTESTATION_AGE_SECONDS + 1;
+        return response(200, JSON.stringify(JWKS));
+      },
+    }),
+    { code: "TOKEN_STALE" },
+  );
+});
+
+test("timing-only dispatch guard reuses the production policy on the verified immutable token", () => {
+  const token = signedToken({
+    payload: validPayload({ iat: NOW_SECONDS, exp: NOW_SECONDS + 3600 }),
+  });
+  validate(token, { expectedSubject: SUBJECT, expectedEmailSha256: EMAIL_SHA256 });
+  assertAccessJwtTimeBounds(token, {
+    now: () => (NOW_SECONDS + MAX_ATTESTATION_AGE_SECONDS) * 1000,
+  });
+  assertCode(
+    () =>
+      assertAccessJwtTimeBounds(token, {
+        now: () => (NOW_SECONDS + MAX_ATTESTATION_AGE_SECONDS + 1) * 1000,
+      }),
+    "TOKEN_STALE",
+  );
+  assertCode(
+    () =>
+      assertAccessJwtTimeBounds(token, {
+        now: () => (NOW_SECONDS + 3600) * 1000,
+      }),
+    "TOKEN_EXPIRED",
+  );
+});
+
+test("freshness cannot be disabled or extended through caller policy options", async () => {
+  const token = signedToken({
+    payload: validPayload({ iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS - 1 }),
+  });
+  const overrides = {
+    maxAttestationAgeSeconds: Infinity,
+    clockSkewSeconds: Infinity,
+    requireFreshness: false,
+  };
+  assertCode(() => validate(token, overrides), "TOKEN_STALE");
+  await assert.rejects(
+    verifyAccessJwt(token, {
+      jwks: JWKS,
+      now: () => NOW_SECONDS * 1000,
+      ...overrides,
+    }),
+    { code: "TOKEN_STALE" },
+  );
+});
+
+test("CLI uses the same production freshness, signature and identity boundaries", async (t) => {
+  const cases = [
+    ["fresh", { iat: NOW_SECONDS }, null],
+    ["below maximum", { iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS + 1 }, null],
+    ["exact maximum", { iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS }, null],
+    ["cached stale token", { iat: NOW_SECONDS - MAX_ATTESTATION_AGE_SECONDS - 1 }, "TOKEN_STALE"],
+    ["missing issued-at", { iat: undefined }, "TOKEN_ISSUED_AT_INVALID"],
+    ["malformed issued-at", { iat: "old" }, "TOKEN_ISSUED_AT_INVALID"],
+    ["future inside skew", { iat: NOW_SECONDS + 60 }, null],
+    ["future outside skew", { iat: NOW_SECONDS + 61 }, "TOKEN_ISSUED_AT_INVALID"],
+    ["expired", { exp: NOW_SECONDS }, "TOKEN_EXPIRED"],
+    ["future not-before", { nbf: NOW_SECONDS + 61 }, "TOKEN_NOT_YET_VALID"],
+    ["wrong subject", { sub: "other-subject" }, "SUBJECT_MISMATCH"],
+    ["wrong email", { email: "other@example.test" }, "EMAIL_MISMATCH"],
+    ["wrong signature with fresh issued-at", { iat: NOW_SECONDS }, "SIGNATURE_INVALID"],
+  ];
+  for (const [name, claims, code] of cases) {
+    await t.test(name, () => {
+      const fixture = makeCliFixture(t);
+      const baseline = createExpectedIdentityFile(fixture);
+      const outputPath = join(fixture.privateDir, "fresh.json");
+      const token = signedToken({
+        payload: validPayload(claims),
+        signer: code === "SIGNATURE_INVALID" ? OTHER_PAIR.privateKey : PRIMARY_PAIR.privateKey,
+      });
+      const result = runCli(
+        fixture,
+        ["--private-out", outputPath, "--expected-identity-file", baseline],
+        token,
+      );
+      assert.equal(result.stderr, "");
+      assert.equal(result.status, code ? 2 : 0);
+      const receipt = JSON.parse(result.stdout);
+      assert.equal(receipt.identity_attestation_status, code ?? "VERIFIED");
+      assert.equal(lstatSync(outputPath, { throwIfNoEntry: false }) !== undefined, code === null);
+      for (const secret of [token, EMAIL, SUBJECT]) assert.ok(!result.stdout.includes(secret));
+      const request = readFileSync(fixture.tracePath, "utf8");
+      assert.ok(!request.includes(token));
+    });
+  }
+});
+
+test("production CLI exposes neither a test clock nor a maximum-age override", async (t) => {
+  for (const [flag, value] of [
+    ["--now-seconds", String(NOW_SECONDS)],
+    ["--max-attestation-age-seconds", "Infinity"],
+  ]) {
+    await t.test(flag, () => {
+      const fixture = makeCliFixture(t);
+      const expected = createExpectedEmailFile(fixture);
+      const outputPath = join(fixture.privateDir, "fresh.json");
+      const result = runCli(
+        fixture,
+        ["--private-out", outputPath, "--expected-email-sha256-file", expected, flag, value],
+        signedToken(),
+      );
+      assert.equal(result.status, 2);
+      assert.deepEqual(JSON.parse(result.stdout), { identity_attestation_status: "USAGE" });
+      assert.equal(result.stderr, "");
+      assert.equal(lstatSync(outputPath, { throwIfNoEntry: false }), undefined);
+      assert.equal(lstatSync(fixture.tracePath, { throwIfNoEntry: false }), undefined);
+    });
+  }
+});
+
+test("shared production policy preserves millisecond freshness and expiration boundaries", async (t) => {
+  for (const [name, elapsedMilliseconds, claims, code] of [
+    ["one millisecond below maximum", 899999, {}, null],
+    ["exact inclusive maximum", 900000, {}, null],
+    ["one millisecond above maximum", 900001, {}, "TOKEN_STALE"],
+    ["999 milliseconds above maximum", 900999, {}, "TOKEN_STALE"],
+    ["before fractional expiration", 499, { exp: NOW_SECONDS + 0.5 }, null],
+    ["at fractional expiration", 500, { exp: NOW_SECONDS + 0.5 }, "TOKEN_EXPIRED"],
+    ["after fractional expiration", 501, { exp: NOW_SECONDS + 0.5 }, "TOKEN_EXPIRED"],
+  ]) {
+    await t.test(name, async () => {
+      const token = signedToken({
+        payload: validPayload({ iat: NOW_SECONDS, exp: NOW_SECONDS + 3600, ...claims }),
+      });
+      const now = () => NOW_SECONDS * 1000 + elapsedMilliseconds;
+      const check = () => validateAccessJwt(token, { jwks: JWKS, nowSeconds: now() / 1000 });
+      const guard = () => assertAccessJwtTimeBounds(token, { now });
+      if (code) {
+        assertCode(check, code);
+        assertCode(guard, code);
+        await assert.rejects(verifyAccessJwt(token, { jwks: JWKS, now }), { code });
+      } else {
+        assert.equal(check().subject, SUBJECT);
+        guard();
+        assert.equal((await verifyAccessJwt(token, { jwks: JWKS, now })).subject, SUBJECT);
+      }
+    });
+  }
+});
+
+test("production CLI does not round away elapsed freshness or fractional expiration", async (t) => {
+  for (const [name, elapsedMilliseconds, exp, code] of [
+    ["one millisecond past maximum age", 900001, NOW_SECONDS + 3600, "TOKEN_STALE"],
+    ["one millisecond past fractional expiration", 501, NOW_SECONDS + 0.5, "TOKEN_EXPIRED"],
+  ]) {
+    await t.test(name, () => {
+      const fixture = makeCliFixture(t, NOW_SECONDS + elapsedMilliseconds / 1000);
+      const baseline = createExpectedIdentityFile(fixture);
+      const outputPath = join(fixture.privateDir, "fresh.json");
+      const result = runCli(
+        fixture,
+        ["--private-out", outputPath, "--expected-identity-file", baseline],
+        signedToken({ payload: validPayload({ iat: NOW_SECONDS, exp }) }),
+      );
+      assert.equal(result.status, 2);
+      assert.equal(result.stderr, "");
+      assert.deepEqual(JSON.parse(result.stdout), { identity_attestation_status: code });
+      assert.equal(lstatSync(outputPath, { throwIfNoEntry: false }), undefined);
+    });
+  }
 });

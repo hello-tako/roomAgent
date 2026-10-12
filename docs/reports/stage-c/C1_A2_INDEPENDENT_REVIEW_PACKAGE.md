@@ -4,18 +4,18 @@ Status: implementation handoff only. **Review of the updated source and human mu
 
 ## Exact evidence coordinates
 
-Repository `takovn2/roomAgent`, ID `1410359112`; branch `fix/roomagent-c1-a2-security-hardening--review-follow-up`. Baseline main/Worker source `3909fada8747ae27ea71daf6da9481a7eb8d9eff`; original handoff `6fac326a7fd3f504a51c23372485af252012e2c8`. The implementation SHA, PR URL, exact-head CI run/job IDs and conclusion are in the PR/final handoff after commit. This avoids self-referential commit/manifests. Review the commit, not a mutable branch label.
+Repository `hello-tako/roomAgent`, ID `1410359112` (transferred from `takovn2/roomAgent`); branch `fix/roomagent-c1-a2-security-hardening--review-follow-up`. Baseline main/Worker source `3909fada8747ae27ea71daf6da9481a7eb8d9eff`; original handoff `6fac326a7fd3f504a51c23372485af252012e2c8`. The implementation SHA, PR URL, exact-head CI run/job IDs and conclusion are in the PR/final handoff after commit. This avoids self-referential commit/manifests. Review the commit, not a mutable branch label.
 
 PR #6 was owner-merged before these fixes were delivered. They are published separately on this follow-up branch from current main, not included in the historical PR #6 approval or merge. Hoplite performed no merge.
 
-- Inner operator manifest SHA-256: `7ff9c4be0199fce8c6e2aac0af07d7c34e99306182fe4d1bdd983f40e4220197`.
-- Outer bundle manifest SHA-256: `a0d8e31d1ccaea5ebbdb796e5080c209a3e578235b3b680e284e91052afcd79a`.
+- Inner operator manifest SHA-256: `3f93809a62fc8424caaccbe13ed6e393468b30e762f610bc28884be605755978`.
+- Outer bundle manifest SHA-256: `06aa52d6e96ad14fd82e875127c6b26f2a61286bae5e51c65c27b48eb28ef736`.
 - Detailed findings, source functions, test counts and limitations: [hardening report](C1_A2_SECURITY_HARDENING_REPORT.md).
 - Original main CI 38093203477 was SUCCESS; original handoff CI 38105477230 was FAILURE with later steps SKIPPED. Neither approves this new operator source.
 
 ## Follow-up review focus
 
-Challenge the 900-second mandatory-`iat` freshness boundary, descriptor no-follow/type/inode checks and replacement cleanup, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
+Challenge the unfloored 900.000-second mandatory safe-integer `iat` boundary, the synchronous freshness sample immediately before B1, descriptor no-follow/bigint snapshot/ancestor rechecks, canonical private-path classification and real Git filename reads, and bound D1 organization-name parameters. The checkpoint SQL interpolation and secret-scanner reduction are intentionally absent. The [review disposition ledger](C1_A2_SECURITY_HARDENING_REPORT.md#pr-6-independent-review-dispositions) accounts for every finding, including F3 and scanner limits that are documented, not eliminated. Review the changed exact head and new hashes; do not reuse the earlier approval.
 
 Also inspect `apps/api/test/room-task-boundary.test.ts`: the CI fixture waits for exact legitimate setup event projections before taking no-side-effect snapshots. The original denied-command/replay assertions are retained; runtime task-room guards are unchanged.
 

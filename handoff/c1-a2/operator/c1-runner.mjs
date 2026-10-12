@@ -19,6 +19,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyBundleIntegrity, verifyManifestConsistency } from "./bundle-integrity.mjs";
+import { assertAccessJwtTimeBounds } from "./attest-access-identity.mjs";
 import {
   ATTEMPT_MARKER_ERROR_CODES,
   assertNoAttemptMarkers,
@@ -827,6 +828,13 @@ async function runInner(argv, deps, cfg, receiptBox) {
     !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(jwt)
   )
     throw new Stop("ACCESS_JWT_ABSENT");
+  const assertFreshTime = () => {
+    try {
+      assertAccessJwtTimeBounds(jwt, { now: deps.now });
+    } catch {
+      throw new Stop("FRESH_ATTESTATION_FAILED");
+    }
+  };
   const freshAttestation = async () => {
     await verifyReviewed();
     const freshPath = join(
@@ -850,6 +858,7 @@ async function runInner(argv, deps, cfg, receiptBox) {
       throw new Stop("FRESH_ATTESTATION_FAILED");
     for (const key of ["issuer", "subject", "email"])
       if (fresh[key] !== record[key]) throw new Stop("FRESH_IDENTITY_MISMATCH", key);
+    assertFreshTime();
   };
   await freshAttestation();
   let health;
@@ -875,9 +884,12 @@ async function runInner(argv, deps, cfg, receiptBox) {
   await postW2(cf, cfg, newId, w2.id);
   await d1State(cf, cfg, cfg.prestate, "PRE_B1_FINAL_D1");
   await verifyReviewed();
+  assertFreshTime();
   mark("B1", { newVersionId: newId, newDeploymentId: w2.id });
   let res;
   let out;
+  // No asynchronous work between this final clock sample and dispatch.
+  assertFreshTime();
   try {
     res = await deps.fetch(`${cfg.appUrl}/operator/staging-bootstrap`, {
       method: "POST",
@@ -976,6 +988,7 @@ async function realDeps(opDir) {
     readSecret: readHidden,
     prompt,
     fetch: globalThis.fetch,
+    now: Date.now,
     getImplementationSha: (approval) => implementationHead(approval, resolve(opDir, "../../..")),
     assertCommittedBundle: (approval) =>
       assertCommittedBundle(approval, resolve(opDir, "../../..")),
